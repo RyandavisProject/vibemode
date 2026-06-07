@@ -388,13 +388,16 @@ class UsageOverlay:
         account = snapshot.account if snapshot and snapshot.account else "NeuroGate"
         plan_status = compact_plan_status(snapshot.plan_status if snapshot else None)
         projected_total = projected_spendable_credits(snapshot) if snapshot else None
-        self._text(10, 7, account, "#76a8ff", 8, "normal", family=self.UI_FONT)
+        plan_x = 54 if len(account) <= 6 else 76
+        self._rounded_rect(6, 5, 158, 21, 5, "#121a26", "#25303b")
+        self._text(12, 7, account, "#76a8ff", 8, "normal", family=self.UI_FONT)
         if plan_status:
-            self._text(68, 7, plan_status, "#76a8ff", 8, "normal", family=self.UI_FONT)
+            self._text(plan_x, 7, plan_status, "#76a8ff", 8, "normal", family=self.UI_FONT)
         else:
-            self._text(68, 7, self.status_text, "#697386", 8, "normal", family=self.UI_FONT)
+            self._text(plan_x, 7, self.status_text, "#697386", 8, "normal", family=self.UI_FONT)
 
-        self._text(220, 7, self.status_text, "#697386", 8, "normal", "ne", family=self.UI_FONT)
+        self._rounded_rect(174, 5, 254, 21, 5, "#121821", "#25303b")
+        self._text(214, 13, self.status_text, "#697386", 8, "normal", "center", family=self.UI_FONT)
         self._rounded_rect(262, 5, 294, 21, 5, "#161d28", "#25303b", tags="interval")
         self._text(278, 13, f"{self.interval_minutes}м", "#9aa4b5", 8, "normal", "center", tags="interval", family=self.UI_FONT)
 
