@@ -98,7 +98,7 @@ class UsageOverlay:
         self.root.bind("<B1-Motion>", self._drag)
         self.root.bind("<Button-3>", self._show_menu)
         self.root.bind("<Escape>", lambda _event: self.close())
-        self.root.bind("<Control-r>", lambda _event: self.refresh())
+        self.root.bind("<Control-r>", lambda _event: self.refresh(force=True))
         self.canvas.tag_bind("interval", "<Button-1>", lambda _event: self._cycle_interval())
 
     def _start_drag(self, event: tk.Event) -> None:
@@ -118,7 +118,7 @@ class UsageOverlay:
         padding = 6
         width = 176
         rows: list[tuple[str, Callable[[], None] | None, bool]] = [
-            ("Обновить", self.refresh, False),
+            ("Обновить", lambda: self.refresh(force=True), False),
             ("", None, False),
             *[
                 (
@@ -364,11 +364,11 @@ class UsageOverlay:
         except Exception:
             pass
 
-    def refresh(self) -> None:
+    def refresh(self, force: bool = False) -> None:
         now = datetime.now().astimezone()
         if self.refreshing:
             return
-        if self.last_refresh_at and now - self.last_refresh_at < timedelta(seconds=self.MIN_REFRESH_SECONDS):
+        if not force and self.last_refresh_at and now - self.last_refresh_at < timedelta(seconds=self.MIN_REFRESH_SECONDS):
             self.status_text = "ждем 1 мин"
             self._render()
             self._schedule_next_refresh()
