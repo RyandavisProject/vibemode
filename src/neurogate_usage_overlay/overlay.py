@@ -67,7 +67,7 @@ class UsageOverlay:
     HEIGHT = 70
     MIN_REFRESH_SECONDS = 60
     LOGIN_POLL_SECONDS = 2
-    INTERVAL_CHOICES_MINUTES = (1, 2, 3, 5, 10, 15)
+    INTERVAL_CHOICES_MINUTES = (1, 3, 5, 10, 15, 60)
     UI_FONT = "Segoe UI Variable Small"
     TEXT_FONT = "Segoe UI Variable Text"
     NUMBER_FONT = "Calibri Light"
@@ -82,22 +82,21 @@ class UsageOverlay:
         self.reader = reader
         self.keep_browser_open_getter = keep_browser_open_getter
         self.keep_browser_open_setter = keep_browser_open_setter
-        self.interval_minutes = max(1, math.ceil(interval_seconds / 60))
-        if self.interval_minutes not in self.INTERVAL_CHOICES_MINUTES:
-            self.interval_minutes = 1
+        self.debug_log = Path.home() / ".neurogate-usage-overlay" / "overlay-ui.log"
+        self.state_file = Path.home() / ".neurogate-usage-overlay" / "overlay-state.json"
+        default_interval = self._normalize_interval_minutes(math.ceil(interval_seconds / 60))
+        self.interval_minutes = self._load_interval_minutes(default_interval)
         self.refreshing = False
         self.after_id: str | None = None
         self.last_refresh_at: datetime | None = None
         self.last_snapshot: UsageSnapshot | None = None
         self.status_text = "обновление"
-        self.debug_log = Path.home() / ".neurogate-usage-overlay" / "overlay-ui.log"
-        self.state_file = Path.home() / ".neurogate-usage-overlay" / "overlay-state.json"
         self.drag_x = 0
         self.drag_y = 0
         self.menu_window: tk.Toplevel | None = None
 
         self.root = tk.Tk()
-        self.root.title("NeuroGate API 1.1")
+        self.root.title("NeuroGate API 1.2")
         self.root.geometry(self._initial_geometry())
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
@@ -146,12 +145,38 @@ class UsageOverlay:
         x, y = self._clamp_position(x, y, self.root.winfo_screenwidth(), self.root.winfo_screenheight())
         return f"{self.WIDTH}x{self.HEIGHT}+{x}+{y}"
 
-    def _load_window_position(self) -> tuple[int, int]:
+    def _load_state(self) -> dict[str, object]:
         try:
             payload = json.loads(self.state_file.read_text(encoding="utf-8"))
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            return {}
+
+    def _save_state(self, updates: dict[str, object]) -> None:
+        try:
+            payload = self._load_state()
+            payload.update(updates)
+            self.state_file.parent.mkdir(parents=True, exist_ok=True)
+            self.state_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001 - user preferences must not break the overlay.
+            self._write_ui_log(f"save_state_error {exc!r}")
+
+    def _load_window_position(self) -> tuple[int, int]:
+        try:
+            payload = self._load_state()
             return int(payload.get("x", 32)), int(payload.get("y", 72))
         except Exception:
             return 32, 72
+
+    def _load_interval_minutes(self, default: int) -> int:
+        try:
+            payload = self._load_state()
+            return self._normalize_interval_minutes(int(payload.get("interval_minutes", default)))
+        except Exception:
+            return self._normalize_interval_minutes(default)
+
+    def _save_interval_minutes(self) -> None:
+        self._save_state({"interval_minutes": self.interval_minutes})
 
     def _save_window_position(self) -> None:
         try:
@@ -161,8 +186,7 @@ class UsageOverlay:
                 self.root.winfo_screenwidth(),
                 self.root.winfo_screenheight(),
             )
-            self.state_file.parent.mkdir(parents=True, exist_ok=True)
-            self.state_file.write_text(json.dumps({"x": x, "y": y}, ensure_ascii=False), encoding="utf-8")
+            self._save_state({"x": x, "y": y})
         except Exception as exc:  # noqa: BLE001 - position persistence must not break dragging.
             self._write_ui_log(f"save_window_position_error {exc!r}")
 
@@ -191,7 +215,7 @@ class UsageOverlay:
             ("", None, False),
             *[
                 (
-                    f"{minutes} мин",
+                    self._format_interval_menu(minutes),
                     lambda value=minutes: self.set_interval(value),
                     minutes == self.interval_minutes,
                 )
@@ -288,6 +312,8 @@ class UsageOverlay:
         self.menu_window = None
 
     def _cycle_interval(self) -> None:
+        if self.interval_minutes not in self.INTERVAL_CHOICES_MINUTES:
+            self.interval_minutes = self.INTERVAL_CHOICES_MINUTES[0]
         index = self.INTERVAL_CHOICES_MINUTES.index(self.interval_minutes)
         self.set_interval(self.INTERVAL_CHOICES_MINUTES[(index + 1) % len(self.INTERVAL_CHOICES_MINUTES)])
 
@@ -315,9 +341,29 @@ class UsageOverlay:
         self._render()
 
     def set_interval(self, minutes: int) -> None:
-        self.interval_minutes = max(1, minutes)
+        self.interval_minutes = self._normalize_interval_minutes(minutes)
+        self._save_interval_minutes()
         self._schedule_next_refresh()
         self._render()
+
+    @classmethod
+    def _normalize_interval_minutes(cls, minutes: int) -> int:
+        if minutes in cls.INTERVAL_CHOICES_MINUTES:
+            return minutes
+        return cls.INTERVAL_CHOICES_MINUTES[0]
+
+    @staticmethod
+    def _format_interval_menu(minutes: int) -> str:
+        if minutes >= 60 and minutes % 60 == 0:
+            hours = minutes // 60
+            return f"{hours} час" if hours == 1 else f"{hours} ч"
+        return f"{minutes} мин"
+
+    @staticmethod
+    def _format_interval_pill(minutes: int) -> str:
+        if minutes >= 60 and minutes % 60 == 0:
+            return f"{minutes // 60}ч"
+        return f"{minutes}м"
 
     def _schedule_next_refresh(self) -> None:
         if self.after_id:
@@ -504,7 +550,17 @@ class UsageOverlay:
         interval_right = min(self.WIDTH - 6, interval_left + 32)
         interval_center = (interval_left + interval_right) // 2
         self._rounded_rect(interval_left, 5, interval_right, 21, 5, pill_fill, pill_outline, tags="interval")
-        self._text(interval_center, 13, f"{self.interval_minutes}м", "#9aa4b5", 8, "normal", "center", tags="interval", family=self.UI_FONT)
+        self._text(
+            interval_center,
+            13,
+            self._format_interval_pill(self.interval_minutes),
+            "#9aa4b5",
+            8,
+            "normal",
+            "center",
+            tags="interval",
+            family=self.UI_FONT,
+        )
 
         self._draw_limit_row(25, "5ч", self._window_by_index(0))
         self._draw_limit_row(47, "7д", self._window_by_index(1))

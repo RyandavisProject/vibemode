@@ -1,5 +1,7 @@
 import unittest
+import tempfile
 from datetime import datetime
+from pathlib import Path
 
 from neurogate_usage_overlay.models import UsageSnapshot, UsageWindow
 from neurogate_usage_overlay.overlay import UsageOverlay
@@ -19,6 +21,11 @@ class FakeRoot:
 
 
 class OverlayScheduleTest(unittest.TestCase):
+    def test_interval_choices_include_one_hour_without_two_minutes(self):
+        self.assertEqual(UsageOverlay.INTERVAL_CHOICES_MINUTES, (1, 3, 5, 10, 15, 60))
+        self.assertEqual(UsageOverlay._format_interval_menu(60), "1 час")
+        self.assertEqual(UsageOverlay._format_interval_pill(60), "1ч")
+
     def test_login_state_polls_quickly(self):
         overlay = UsageOverlay.__new__(UsageOverlay)
         overlay.root = FakeRoot()
@@ -43,6 +50,43 @@ class OverlayScheduleTest(unittest.TestCase):
         overlay._schedule_next_refresh()
 
         self.assertEqual(overlay.root.after_calls, [3 * 60 * 1000])
+
+    def test_interval_is_saved_in_overlay_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            overlay = UsageOverlay.__new__(UsageOverlay)
+            overlay.state_file = Path(directory) / "overlay-state.json"
+            overlay.interval_minutes = 60
+
+            overlay._save_interval_minutes()
+
+            restored = UsageOverlay.__new__(UsageOverlay)
+            restored.state_file = overlay.state_file
+            self.assertEqual(restored._load_interval_minutes(1), 60)
+
+    def test_window_position_save_preserves_interval(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state_file = Path(directory) / "overlay-state.json"
+            state_file.write_text('{"interval_minutes": 60}', encoding="utf-8")
+
+            overlay = UsageOverlay.__new__(UsageOverlay)
+            overlay.state_file = state_file
+            overlay.root = type(
+                "Root",
+                (),
+                {
+                    "winfo_x": lambda _self: 100,
+                    "winfo_y": lambda _self: 120,
+                    "winfo_screenwidth": lambda _self: 800,
+                    "winfo_screenheight": lambda _self: 600,
+                },
+            )()
+
+            overlay._save_window_position()
+
+            restored = UsageOverlay.__new__(UsageOverlay)
+            restored.state_file = state_file
+            self.assertEqual(restored._load_interval_minutes(1), 60)
+            self.assertEqual(restored._load_window_position(), (100, 120))
 
 
 class OverlayPositionTest(unittest.TestCase):
