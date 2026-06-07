@@ -16,6 +16,7 @@ available on the page:
 - account name;
 - 5-hour credit balance;
 - 7-day credit balance;
+- projected spendable credits until the current tariff time expires;
 - reset time for each window;
 - last refresh status;
 - refresh interval.
@@ -23,6 +24,17 @@ available on the page:
 Older fields such as token totals, cache totals, and `used / total` tariff
 pairs are no longer shown because the new page does not expose them in the same
 visible layout.
+
+The value after `/` is a local projection. It estimates how many credits can
+still be physically spent before the current tariff time expires, using the
+current 5-hour balance, the current 7-day balance, their reset timers, and the
+known tariff caps:
+
+- 5-hour window: `120M` credits;
+- 7-day window: `600M` credits.
+
+The final projected number is the smaller of the 5-hour pacing capacity and the
+7-day capacity.
 
 ## Privacy
 

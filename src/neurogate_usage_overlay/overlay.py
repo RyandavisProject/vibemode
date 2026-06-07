@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Callable
 
 from .models import UsageSnapshot, UsageWindow
+from .projection import projected_spendable_credits
 
 
 SnapshotReader = Callable[[], UsageSnapshot]
@@ -60,7 +61,7 @@ def compact_plan_status(value: str | None) -> str:
 
 
 class UsageOverlay:
-    WIDTH = 300
+    WIDTH = 340
     HEIGHT = 70
     MIN_REFRESH_SECONDS = 60
     INTERVAL_CHOICES_MINUTES = (1, 2, 3, 5, 10, 15)
@@ -316,16 +317,18 @@ class UsageOverlay:
             return "7д"
         return fallback
 
-    def _draw_limit_row(self, y: int, fallback_label: str, window: UsageWindow | None) -> None:
+    def _draw_limit_row(self, y: int, fallback_label: str, window: UsageWindow | None, total: int | None) -> None:
         label = self._compact_window_title(window, fallback_label)
         value = format_credits(window.display_value if window else None)
+        if total is not None and window and window.display_value is not None:
+            value = f"{value} / {format_credits(total)}"
         reset = compact_reset_text(window.reset_text if window else None)
 
         self._text(10, y + 1, label, "#9aa8ba", 9, "normal", family=self.UI_FONT)
         self._text(40, y, "остаток", "#667386", 8, "normal", family=self.UI_FONT)
         self._text(110, y - 1, value, "#ffb86b", 11, "normal", family=self.TEXT_FONT)
-        self._text(290, y + 2, reset, "#8793a4", 8, "normal", "ne", family=self.UI_FONT)
-        self._progress(40, y + 17, 248, None)
+        self._text(330, y + 2, reset, "#8793a4", 8, "normal", "ne", family=self.UI_FONT)
+        self._progress(40, y + 17, 288, None)
 
     def _render(self) -> None:
         self.canvas.delete("all")
@@ -335,18 +338,19 @@ class UsageOverlay:
         snapshot = self.last_snapshot
         account = snapshot.account if snapshot and snapshot.account else "Neurogate"
         plan_status = compact_plan_status(snapshot.plan_status if snapshot else None)
+        projected_total = projected_spendable_credits(snapshot) if snapshot else None
         self._text(10, 7, account, "#76a8ff", 8, "normal", family=self.UI_FONT)
         if plan_status:
             self._text(68, 7, plan_status, "#76a8ff", 8, "normal", family=self.UI_FONT)
         else:
             self._text(68, 7, self.status_text, "#697386", 8, "normal", family=self.UI_FONT)
 
-        self._text(218, 7, self.status_text, "#697386", 8, "normal", "ne", family=self.UI_FONT)
-        self._rounded_rect(262, 5, 294, 21, 5, "#161d28", "#25303b", tags="interval")
-        self._text(278, 13, f"{self.interval_minutes}м", "#9aa4b5", 8, "normal", "center", tags="interval", family=self.UI_FONT)
+        self._text(258, 7, self.status_text, "#697386", 8, "normal", "ne", family=self.UI_FONT)
+        self._rounded_rect(302, 5, 334, 21, 5, "#161d28", "#25303b", tags="interval")
+        self._text(318, 13, f"{self.interval_minutes}м", "#9aa4b5", 8, "normal", "center", tags="interval", family=self.UI_FONT)
 
-        self._draw_limit_row(25, "5ч", self._window_by_index(0))
-        self._draw_limit_row(47, "7д", self._window_by_index(1))
+        self._draw_limit_row(25, "5ч", self._window_by_index(0), projected_total)
+        self._draw_limit_row(47, "7д", self._window_by_index(1), projected_total)
 
         if snapshot and not snapshot.windows:
             message = "нужен вход в Neurogate" if not snapshot.total_used else "лимиты не раскрылись"
