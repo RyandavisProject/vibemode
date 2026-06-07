@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "neurogate-usage-overlay"
+version = "0.1.0"
+description = "Small Windows always-on-top overlay for Vibemode/Neurogate API usage limits."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Neurogate usage overlay contributors" }]
+keywords = ["vibemode", "neurogate", "overlay", "usage", "windows", "playwright"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Win32 (MS Windows)",
+  "Intended Audience :: End Users/Desktop",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: Microsoft :: Windows",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+  "playwright>=1.44",
+]
+
+[project.urls]
+Homepage = "https://github.com/YOUR-GITHUB-USER/neurogate-usage-overlay"
+Issues = "https://github.com/YOUR-GITHUB-USER/neurogate-usage-overlay/issues"
+
+[project.scripts]
+neurogate-usage-overlay = "neurogate_usage_overlay.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
