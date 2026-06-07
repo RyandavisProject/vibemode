@@ -18,6 +18,11 @@ It parses the values needed for the desktop overlay:
 - reset times;
 - refresh status.
 
+The browser is hidden by default after login. If the saved browser session is
+expired, the app opens a visible Chrome window so the user can log in directly
+on the Vibemode/Neurogate website. After a successful read, that visible window
+is closed and later updates continue in hidden mode.
+
 ## What The App Does Not Do
 
 - It does not ask for a password.
@@ -26,6 +31,8 @@ It parses the values needed for the desktop overlay:
 - It does not run a local web server.
 - It does not include analytics.
 - It does not write network traces by default.
+- It does not keep a visible browser window open after successful login unless
+  the user starts it with `--show-browser`.
 
 ## Local Files
 

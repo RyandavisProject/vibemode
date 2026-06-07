@@ -2,9 +2,10 @@
 
 Compact Windows overlay for Vibemode/Neurogate API usage limits.
 
-The app opens `https://portal.neurogate.space/client/usage` in a local Chrome
-profile, reads the visible usage page, and shows a small always-on-top desktop
-widget with the current credit limits.
+The app reads `https://portal.neurogate.space/client/usage` through a local
+Chrome profile and shows a small always-on-top desktop widget with the current
+credit limits. By default the browser runs hidden after login. A visible Chrome
+window opens only when the user needs to log in again.
 
 ## Current UI
 
@@ -32,6 +33,8 @@ The overlay is local-first.
 - It does not send usage data to this project, to a server, or to analytics.
 - It reads only the text already visible in your own browser session.
 - Browser cookies stay on your computer in a local Playwright/Chrome profile.
+- After successful login, the visible Chrome window is closed and future reads
+  continue in hidden browser mode.
 
 Default local profile path:
 
@@ -84,10 +87,13 @@ Vibemode Overlay
 
 First run:
 
-1. Chrome opens with a separate local browser profile.
-2. Log in directly on the Vibemode/Neurogate website.
-3. The overlay reads the usage page after the cabinet loads.
-4. The widget refreshes no more often than once per minute.
+1. The overlay first tries to read the usage page in hidden mode.
+2. If login is required, Chrome opens with a separate local browser profile.
+3. Log in directly on the Vibemode/Neurogate website.
+4. After the first successful read, the visible Chrome window closes.
+5. Future updates continue in hidden mode.
+6. The widget refreshes no more often than once per minute unless you choose
+   manual refresh.
 
 ## Controls
 
@@ -115,6 +121,12 @@ Run overlay:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\run-overlay.ps1
+```
+
+Keep browser visible for debugging:
+
+```powershell
+.\.venv\Scripts\python.exe -m neurogate_usage_overlay --show-browser
 ```
 
 Run one console check:
@@ -194,8 +206,9 @@ The test suite currently covers both known page formats:
   the parser may need a small update.
 - The app is Windows-focused because it uses Tkinter desktop behavior and
   Windows shortcut scripts.
-- The app does not bypass login or session expiry. If the site logs you out,
-  log in again in the Chrome window opened by the overlay.
+- The app does not bypass login or session expiry. If the site logs you out, the
+  overlay opens a visible Chrome window so you can log in again. After a
+  successful read, it returns to hidden mode.
 
 ## License
 

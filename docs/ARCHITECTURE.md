@@ -10,6 +10,8 @@ run-overlay.ps1
   -> python -m neurogate_usage_overlay
     -> NeurogateUsageReader
       -> Playwright persistent Chrome profile
+      -> hidden browser by default
+      -> visible browser only when login is required
       -> Vibemode/Neurogate usage page
       -> visible body text
     -> parse_usage_text()
@@ -35,6 +37,10 @@ run-overlay.ps1
 
 - owns the Playwright lifecycle;
 - launches a persistent local Chrome profile;
+- prefers hidden browser mode after login;
+- opens a visible Chrome window only when the saved session requires login;
+- closes the visible Chrome window after a successful read and returns to hidden
+  mode;
 - waits for the dynamic usage page to expose both limit cards;
 - falls back to the last good snapshot if the site is temporarily logged out or
   still loading;
@@ -72,6 +78,8 @@ the user's own machine.
   labels.
 - Playwright gives reliable browser automation, but it means the first install
   is heavier than a pure HTTP client.
+- Hidden mode improves desktop privacy, but it still relies on local browser
+  session files. Treat the profile folder like normal browser cookies.
 
 ## Next Engineering Improvements
 

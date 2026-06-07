@@ -10,6 +10,8 @@ passwords, API keys, cookies, or browser profile folders.
 - The app reads visible usage text from the page.
 - No password field is exposed by the app.
 - The app has no telemetry, backend, or analytics endpoint.
+- The browser runs hidden after successful login by default. A visible Chrome
+  window is opened only when the user needs to log in again.
 
 ## Local session data
 

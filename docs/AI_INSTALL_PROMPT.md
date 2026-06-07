@@ -17,6 +17,8 @@ Rules:
 - Do not collect, print, or store credentials.
 - The user must log in directly on the Vibemode/Neurogate website if Chrome
   opens a login page.
+- After login succeeds, the visible Chrome window should close automatically
+  and future overlay updates should continue in hidden mode.
 - Do not upload local browser profiles, cookies, logs, screenshots, or API keys.
 - Do not push to GitHub unless the user explicitly asks.
 
@@ -40,7 +42,8 @@ Steps:
 6. Launch the overlay:
    powershell -ExecutionPolicy Bypass -File .\scripts\run-overlay.ps1
 7. If Chrome opens a Vibemode/Neurogate login page, tell the user:
-   "Please log in in this Chrome window. The app does not receive your password."
+   "Please log in in this Chrome window. The app does not receive your password.
+   After login, the visible browser will close and updates will continue hidden."
 8. After launch, report:
    - what was installed;
    - where the desktop shortcut is;

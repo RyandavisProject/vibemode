@@ -9,7 +9,7 @@ from .overlay import UsageOverlay
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Neurogate API usage overlay.")
+    parser = argparse.ArgumentParser(description="Vibemode/Neurogate API usage overlay.")
     parser.add_argument("--url", default=USAGE_URL, help="Usage page URL.")
     parser.add_argument("--interval", type=int, default=60, help="Refresh interval in seconds.")
     parser.add_argument(
@@ -18,7 +18,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path.home() / ".neurogate-usage-overlay" / "browser-profile",
         help="Local browser profile directory. Contains cookies/session, not passwords from this app.",
     )
-    parser.add_argument("--headless", action="store_true", help="Run browser hidden after login is complete.")
+    parser.add_argument(
+        "--show-browser",
+        action="store_true",
+        help="Keep the browser visible instead of using the default hidden mode after login.",
+    )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Compatibility flag. Hidden mode is already the default.",
+    )
     parser.add_argument("--browser-channel", default="chrome", help="Playwright browser channel, usually chrome.")
     parser.add_argument("--once", action="store_true", help="Print one snapshot and exit.")
     return parser
@@ -31,7 +40,7 @@ def main() -> int:
     settings = BrowserSettings(
         usage_url=args.url,
         profile_dir=args.profile_dir,
-        headless=args.headless,
+        headless=args.headless or not args.show_browser,
         browser_channel=args.browser_channel,
     )
     reader = NeurogateUsageReader(settings)
