@@ -47,8 +47,20 @@ def compact_reset_text(value: str | None) -> str:
     )
 
 
+def compact_plan_status(value: str | None) -> str:
+    if not value:
+        return ""
+    cleaned = value.strip()
+    prefixes = ("активен ещё", "активен еще")
+    for prefix in prefixes:
+        if cleaned.lower().startswith(prefix):
+            cleaned = cleaned[len(prefix) :].strip()
+            break
+    return f"ост. {compact_reset_text(cleaned)}"
+
+
 class UsageOverlay:
-    WIDTH = 240
+    WIDTH = 260
     HEIGHT = 70
     MIN_REFRESH_SECONDS = 60
     INTERVAL_CHOICES_MINUTES = (1, 2, 3, 5, 10, 15)
@@ -311,9 +323,9 @@ class UsageOverlay:
 
         self._text(10, y + 1, label, "#9aa8ba", 9, "normal", family=self.UI_FONT)
         self._text(40, y, "остаток", "#667386", 8, "normal", family=self.UI_FONT)
-        self._text(96, y - 1, value, "#ffb86b", 11, "normal", family=self.TEXT_FONT)
-        self._text(230, y + 2, reset, "#8793a4", 8, "normal", "ne", family=self.UI_FONT)
-        self._progress(40, y + 17, 188, None)
+        self._text(110, y - 1, value, "#ffb86b", 11, "normal", family=self.TEXT_FONT)
+        self._text(250, y + 2, reset, "#8793a4", 8, "normal", "ne", family=self.UI_FONT)
+        self._progress(40, y + 17, 208, None)
 
     def _render(self) -> None:
         self.canvas.delete("all")
@@ -322,11 +334,15 @@ class UsageOverlay:
 
         snapshot = self.last_snapshot
         account = snapshot.account if snapshot and snapshot.account else "Neurogate"
-        self._text(10, 7, f"лимиты · {account}", "#76a8ff", 8, "normal", family=self.UI_FONT)
-        self._text(118, 7, self.status_text, "#697386", 8, "normal", family=self.UI_FONT)
+        plan_status = compact_plan_status(snapshot.plan_status if snapshot else None)
+        self._text(10, 7, account, "#76a8ff", 8, "normal", family=self.UI_FONT)
+        if plan_status:
+            self._text(68, 7, plan_status, "#76a8ff", 8, "normal", family=self.UI_FONT)
+        else:
+            self._text(68, 7, self.status_text, "#697386", 8, "normal", family=self.UI_FONT)
 
-        self._rounded_rect(202, 5, 234, 21, 5, "#161d28", "#25303b", tags="interval")
-        self._text(218, 13, f"{self.interval_minutes}м", "#9aa4b5", 8, "normal", "center", tags="interval", family=self.UI_FONT)
+        self._rounded_rect(222, 5, 254, 21, 5, "#161d28", "#25303b", tags="interval")
+        self._text(238, 13, f"{self.interval_minutes}м", "#9aa4b5", 8, "normal", "center", tags="interval", family=self.UI_FONT)
 
         self._draw_limit_row(25, "5ч", self._window_by_index(0))
         self._draw_limit_row(47, "7д", self._window_by_index(1))
