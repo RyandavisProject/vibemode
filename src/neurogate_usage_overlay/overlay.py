@@ -476,23 +476,25 @@ class UsageOverlay:
         plan_x = account_x + account_width + 8
         plan_width = self._measure_text(plan_text, 8, family=self.UI_FONT)
         left_pill_right = min(122, plan_x + plan_width + 4)
-        self._rounded_rect(6, 5, left_pill_right, 21, 5, "#161d28", "#25303b")
-        self._text(12, 7, account, "#76a8ff", 8, "normal", family=self.UI_FONT)
+        pill_fill = "#1a222d"
+        pill_outline = "#303946"
+        self._rounded_rect(6, 5, left_pill_right, 21, 5, pill_fill, pill_outline)
+        self._text(12, 6, account, "#76a8ff", 8, "normal", family=self.UI_FONT)
         if plan_status:
-            self._text(plan_x, 7, plan_status, "#76a8ff", 8, "normal", family=self.UI_FONT)
+            self._text(plan_x, 6, plan_status, "#76a8ff", 8, "normal", family=self.UI_FONT)
         else:
-            self._text(plan_x, 7, self.status_text, "#697386", 8, "normal", family=self.UI_FONT)
+            self._text(plan_x, 6, self.status_text, "#697386", 8, "normal", family=self.UI_FONT)
 
         status_width = self._measure_text(self.status_text, 8, family=self.UI_FONT)
         status_left = left_pill_right + 3
         status_right = min(196, status_left + status_width + 8)
         status_center = (status_left + status_right) // 2
-        self._rounded_rect(status_left, 5, status_right, 21, 5, "#161d28", "#25303b")
+        self._rounded_rect(status_left, 5, status_right, 21, 5, pill_fill, pill_outline)
         self._text(status_center, 13, self.status_text, "#697386", 8, "normal", "center", family=self.UI_FONT)
         interval_left = status_right + 4
         interval_right = min(self.WIDTH - 6, interval_left + 32)
         interval_center = (interval_left + interval_right) // 2
-        self._rounded_rect(interval_left, 5, interval_right, 21, 5, "#161d28", "#25303b", tags="interval")
+        self._rounded_rect(interval_left, 5, interval_right, 21, 5, pill_fill, pill_outline, tags="interval")
         self._text(interval_center, 13, f"{self.interval_minutes}м", "#9aa4b5", 8, "normal", "center", tags="interval", family=self.UI_FONT)
 
         self._draw_limit_row(25, "5ч", self._window_by_index(0))
