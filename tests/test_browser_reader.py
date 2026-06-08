@@ -104,6 +104,48 @@ class BrowserReaderModeTest(unittest.TestCase):
         self.assertFalse(snapshot.is_cached)
         self.assertEqual(snapshot.status_note, "нужен вход")
 
+    def test_visible_filled_login_form_is_submitted_automatically(self):
+        reader = NeurogateUsageReader(BrowserSettings(headless=True))
+        reader._page = type("Page", (), {"url": reader.settings.usage_url})()
+        reader._current_headless = False
+        reader._login_visible = True
+        calls = {"click": 0}
+        texts = iter(
+            [
+                "EMAIL\nПАРОЛЬ\nВойти",
+                """
+                КАБИНЕТ КЛИЕНТА
+                Лимиты
+                Подробная информация о Вашем тарифе
+                ascend
+                активен ещё 2 д 2 ч
+                5 часов
+                Сброс через 4 ч 58 мин
+                119 300 000
+                Кредитов осталось
+                7 дней
+                Сброс через 1 д 3 ч
+                289 100 000
+                Кредитов осталось
+                """,
+            ]
+        )
+
+        def click_login() -> bool:
+            calls["click"] += 1
+            return True
+
+        reader._wait_for_usage_text = lambda: next(texts)  # type: ignore[method-assign]
+        reader._click_login_action_if_available = click_login  # type: ignore[method-assign]
+        reader._attach_window_progress = lambda _snapshot: None  # type: ignore[method-assign]
+        reader._hide_visible_browser_after_success = lambda: None  # type: ignore[method-assign]
+        reader._write_debug = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+
+        snapshot = reader.read()
+
+        self.assertEqual(calls["click"], 1)
+        self.assertTrue(snapshot.has_data)
+
     def test_attach_window_progress_clamps_site_percent(self):
         reader = NeurogateUsageReader(BrowserSettings())
         reader._page = object()

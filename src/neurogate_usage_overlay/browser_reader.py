@@ -188,6 +188,9 @@ class NeurogateUsageReader:
                 if not self._login_prompt_opened:
                     self._open_visible_login_window()
                     text = self._wait_for_usage_text()
+        if self._is_login_text(text) and self._current_headless is False:
+            if self._click_login_action_if_available():
+                text = self._wait_for_usage_text()
         snapshot = parse_usage_text(text, source_url=self._page.url)
         self._attach_window_progress(snapshot)
         if not snapshot.windows and not self._is_login_text(text):
@@ -226,23 +229,49 @@ class NeurogateUsageReader:
         except Exception:
             pass
 
-    def _click_login_action_if_available(self) -> None:
+    def _click_login_action_if_available(self) -> bool:
         assert self._page is not None
         candidates = (
-            "Connect Codex",
-            "Войти",
-            "Sign in",
-            "Log in",
+            ("Connect Codex", False),
+            ("Войти", True),
+            ("Sign in", True),
+            ("Log in", True),
         )
-        for label in candidates:
+        for label, needs_credentials in candidates:
             try:
+                if needs_credentials and not self._login_form_has_filled_credentials():
+                    continue
                 button = self._page.get_by_text(label, exact=False).first
                 if button.count() > 0 and button.is_visible(timeout=600):
                     button.click(timeout=1500)
                     self._page.wait_for_timeout(1200)
-                    return
+                    return True
             except Exception:
                 pass
+        return False
+
+    def _login_form_has_filled_credentials(self) -> bool:
+        assert self._page is not None
+        try:
+            return bool(
+                self._page.evaluate(
+                    """() => {
+                        const email = document.querySelector(
+                            'input[type="email"], input[name*="email" i], input[autocomplete="email"]'
+                        );
+                        const password = document.querySelector(
+                            'input[type="password"], input[name*="password" i], input[autocomplete="current-password"]'
+                        );
+                        return Boolean(
+                            email && password &&
+                            String(email.value || "").trim() &&
+                            String(password.value || "").trim()
+                        );
+                    }"""
+                )
+            )
+        except Exception:
+            return False
 
     def _hide_visible_browser_after_success(self) -> None:
         if (

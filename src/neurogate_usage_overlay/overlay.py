@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
+from .history import DailyUsageStore, spent_since_reset, window_key
 from .models import UsageSnapshot, UsageWindow
 
 
@@ -84,6 +85,7 @@ class UsageOverlay:
         self.keep_browser_open_setter = keep_browser_open_setter
         self.debug_log = Path.home() / ".neurogate-usage-overlay" / "overlay-ui.log"
         self.state_file = Path.home() / ".neurogate-usage-overlay" / "overlay-state.json"
+        self.daily_usage = DailyUsageStore(Path.home() / ".neurogate-usage-overlay" / "usage-daily.json")
         default_interval = self._normalize_interval_minutes(math.ceil(interval_seconds / 60))
         self.interval_minutes = self._load_interval_minutes(default_interval)
         self.refreshing = False
@@ -94,9 +96,10 @@ class UsageOverlay:
         self.drag_x = 0
         self.drag_y = 0
         self.menu_window: tk.Toplevel | None = None
+        self.tooltip_window: tk.Toplevel | None = None
 
         self.root = tk.Tk()
-        self.root.title("NeuroGate API 1.2.1")
+        self.root.title("NeuroGate API 1.3.0")
         self.root.geometry(self._initial_geometry())
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
@@ -311,6 +314,66 @@ class UsageOverlay:
             pass
         self.menu_window = None
 
+    def _show_tooltip(self, event: tk.Event, text: str | None) -> None:
+        if not text:
+            return
+        self._hide_tooltip()
+
+        tooltip = tk.Toplevel(self.root)
+        self.tooltip_window = tooltip
+        tooltip.overrideredirect(True)
+        tooltip.attributes("-topmost", True)
+        tooltip.attributes("-alpha", 0.97)
+        tooltip.configure(bg="#0d1118", bd=0, highlightthickness=0)
+
+        label = tk.Label(
+            tooltip,
+            text=text,
+            bg="#0f151f",
+            fg="#f4f7fb",
+            font=(self.UI_FONT, 8, "normal"),
+            padx=8,
+            pady=5,
+            bd=1,
+            relief="solid",
+            highlightthickness=1,
+            highlightbackground="#303946",
+        )
+        label.pack()
+        tooltip.update_idletasks()
+
+        x = event.x_root + 8
+        y = event.y_root + 12
+        width = tooltip.winfo_reqwidth()
+        height = tooltip.winfo_reqheight()
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        x = max(8, min(x, screen_width - width - 8))
+        y = max(8, min(y, screen_height - height - 8))
+        tooltip.geometry(f"+{x}+{y}")
+
+    def _move_tooltip(self, event: tk.Event) -> None:
+        if not self.tooltip_window:
+            return
+        x = event.x_root + 8
+        y = event.y_root + 12
+        width = self.tooltip_window.winfo_reqwidth()
+        height = self.tooltip_window.winfo_reqheight()
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        x = max(8, min(x, screen_width - width - 8))
+        y = max(8, min(y, screen_height - height - 8))
+        self.tooltip_window.geometry(f"+{x}+{y}")
+
+    def _hide_tooltip(self) -> None:
+        if not self.tooltip_window:
+            return
+        try:
+            self.tooltip_window.destroy()
+        except tk.TclError:
+            pass
+        self.tooltip_window = None
+
     def _cycle_interval(self) -> None:
         if self.interval_minutes not in self.INTERVAL_CHOICES_MINUTES:
             self.interval_minutes = self.INTERVAL_CHOICES_MINUTES[0]
@@ -491,15 +554,38 @@ class UsageOverlay:
             return "7д"
         return fallback
 
+    def _limit_tooltip_text(self, label: str, window: UsageWindow | None) -> str | None:
+        if not window:
+            return None
+        if label == "5ч":
+            spent = spent_since_reset(window)
+            value = short_number(spent) if spent is not None else "нет данных"
+            return f"Потрачено со сброса: {value}"
+        if label == "7д" and self.last_snapshot:
+            today_spent = self.daily_usage.today_spent_7d(self.last_snapshot)
+            value = short_number(today_spent.amount) if today_spent is not None else "нет данных"
+            since = today_spent.since_text if today_spent is not None else "--:--"
+            if since == "00:00" or since == "--:--":
+                return f"сегодня потрачено: {value}"
+            return f"сегодня потрачено с {since}: {value}"
+        return None
+
     def _draw_limit_row(self, y: int, fallback_label: str, window: UsageWindow | None) -> None:
         label = self._compact_window_title(window, fallback_label)
         value = format_credits(window.display_value if window else None)
         reset = compact_reset_text(window.reset_text if window else None)
         percent = self._window_progress_percent(window)
+        tooltip = self._limit_tooltip_text(label, window)
+        value_tag = f"limit-value-{window_key(window) or fallback_label}"
 
         self._text(9, y, label, "#9aa8ba", 9, "normal", family=self.UI_FONT)
         self._text(31, y, "остаток", "#667386", 8, "normal", family=self.UI_FONT)
-        self._text(124, y + 8, value, "#ffb86b", 10, "bold", "center", family=self.NUMBER_FONT)
+        self.canvas.create_rectangle(92, y + 1, 158, y + 16, fill="#101722", outline="", tags=value_tag)
+        self._text(124, y + 8, value, "#ffb86b", 10, "bold", "center", tags=value_tag, family=self.NUMBER_FONT)
+        if tooltip:
+            self.canvas.tag_bind(value_tag, "<Enter>", lambda event, text=tooltip: self._show_tooltip(event, text))
+            self.canvas.tag_bind(value_tag, "<Motion>", lambda event: self._move_tooltip(event))
+            self.canvas.tag_bind(value_tag, "<Leave>", lambda _event: self._hide_tooltip())
         self._text(214, y + 2, reset, "#8793a4", 8, "normal", "ne", family=self.UI_FONT)
         self._progress(30, y + 17, 184, percent)
 
@@ -568,6 +654,8 @@ class UsageOverlay:
     def _apply_snapshot(self, snapshot: UsageSnapshot) -> None:
         self.last_snapshot = snapshot
         self.last_refresh_at = datetime.now().astimezone()
+        if snapshot.has_data:
+            self.daily_usage.record_snapshot(snapshot, self.last_refresh_at)
         if snapshot.status_note:
             self.status_text = snapshot.status_note
         else:
@@ -628,5 +716,6 @@ class UsageOverlay:
     def close(self) -> None:
         if self.after_id:
             self.root.after_cancel(self.after_id)
+        self._hide_tooltip()
         self._save_window_position()
         self.root.destroy()

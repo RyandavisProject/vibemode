@@ -15,6 +15,8 @@ It parses the values needed for the desktop overlay:
 - account label;
 - 5-hour remaining credits;
 - 7-day remaining credits;
+- current-window spending tooltip values;
+- current-day spending tooltip values;
 - reset times;
 - refresh status.
 
@@ -53,6 +55,17 @@ Overlay UI state is stored locally:
 ```text
 %USERPROFILE%\.neurogate-usage-overlay\overlay-state.json
 ```
+
+The current-day spending baseline is stored locally:
+
+```text
+%USERPROFILE%\.neurogate-usage-overlay\usage-daily.json
+```
+
+This file keeps only the current day's 7-day remaining-credit baseline, the
+baseline timestamp, and the last seen 7-day remaining value. It is rewritten
+when the local date changes or the 7-day remaining balance grows. It is not an
+append-only history file.
 
 Local logs are also written under:
 

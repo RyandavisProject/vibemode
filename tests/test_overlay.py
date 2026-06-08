@@ -129,6 +129,39 @@ class OverlayProgressTest(unittest.TestCase):
 
         self.assertEqual(len(calls), 1)
 
+    def test_five_hour_tooltip_reports_spent_since_reset(self):
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        window = UsageWindow(title="5 часов", limit_total=120_000_000, credits_remaining=119_300_000)
+
+        self.assertEqual(overlay._limit_tooltip_text("5ч", window), "Потрачено со сброса: 700.0K")
+
+    def test_seven_day_tooltip_reports_today_spent(self):
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        snapshot = UsageSnapshot(updated_at=datetime.now(), windows=[UsageWindow(title="7 дней", credits_remaining=289_100_000)])
+        overlay.last_snapshot = snapshot
+        today_spent = type("TodaySpend", (), {"amount": 10_900_000, "since_text": "07:18"})()
+        overlay.daily_usage = type("DailyUsage", (), {"today_spent_7d": lambda _self, _snapshot: today_spent})()
+
+        self.assertEqual(overlay._limit_tooltip_text("7д", snapshot.windows[0]), "сегодня потрачено с 07:18: 10.9M")
+
+    def test_seven_day_tooltip_hides_unknown_since_time(self):
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        snapshot = UsageSnapshot(updated_at=datetime.now(), windows=[UsageWindow(title="7 дней", credits_remaining=289_100_000)])
+        overlay.last_snapshot = snapshot
+        today_spent = type("TodaySpend", (), {"amount": 1_500_000, "since_text": "--:--"})()
+        overlay.daily_usage = type("DailyUsage", (), {"today_spent_7d": lambda _self, _snapshot: today_spent})()
+
+        self.assertEqual(overlay._limit_tooltip_text("7д", snapshot.windows[0]), "сегодня потрачено: 1.5M")
+
+    def test_seven_day_tooltip_uses_full_day_wording_for_midnight_baseline(self):
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        snapshot = UsageSnapshot(updated_at=datetime.now(), windows=[UsageWindow(title="7 дней", credits_remaining=289_100_000)])
+        overlay.last_snapshot = snapshot
+        today_spent = type("TodaySpend", (), {"amount": 10_400_000, "since_text": "00:00"})()
+        overlay.daily_usage = type("DailyUsage", (), {"today_spent_7d": lambda _self, _snapshot: today_spent})()
+
+        self.assertEqual(overlay._limit_tooltip_text("7д", snapshot.windows[0]), "сегодня потрачено: 10.4M")
+
 
 class OverlayRenderTest(unittest.TestCase):
     def test_login_state_renders_single_centered_message(self):
