@@ -1,4 +1,4 @@
-# NeuroGate API 1.4.0
+# NeuroGate API 1.5.0
 
 Небольшой Windows-оверлей для лимитов NeuroGate API.
 
@@ -31,7 +31,8 @@ The main documentation is in Russian because the primary users are Russian-speak
   первой дневной точки отсчёта;
 - время до сброса каждого лимита;
 - время последнего обновления;
-- выбранный интервал обновления.
+- выбранный интервал обновления;
+- уведомление о новой версии, если на GitHub опубликован свежий релиз.
 
 Старые поля вроде общего количества токенов, кеша и пары `использовано / всего`
 не показываются, если новая страница их больше не отдаёт в видимом интерфейсе.
@@ -84,7 +85,25 @@ The main documentation is in Russian because the primary users are Russian-speak
 
 ## Установка
 
-Через GitHub:
+### Вариант 1: обычная установка из ZIP
+
+Этот способ подходит пользователю без Codex, Claude Code и Git.
+
+1. Открой GitHub-страницу проекта:
+   `https://github.com/RyandavisProject/neurogate-overlay`
+2. Скачай ZIP-архив последней версии из раздела Releases.
+3. Распакуй архив в обычную папку, например:
+   `C:\NeuroGate API`
+4. Дважды нажми файл:
+
+```text
+Install-NeuroGate-API.bat
+```
+
+Установщик создаст локальное Python-окружение, поставит зависимости и добавит
+ярлык `NeuroGate API` на рабочий стол.
+
+### Вариант 2: установка через Codex, Claude Code или Git
 
 ```powershell
 git clone https://github.com/RyandavisProject/neurogate-overlay.git
@@ -92,7 +111,8 @@ cd neurogate-overlay
 powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 ```
 
-Или двойным кликом:
+Если проект уже скачан или склонирован, можно также запустить старый установщик
+двойным кликом:
 
 ```text
 scripts\install.bat
@@ -153,12 +173,47 @@ NeuroGate API
 - Пункт `Не закрывать ЛК` держит страницу NeuroGate открытой отдельным окном.
 - Пункт `2x размер` включает увеличенный интерфейс. Координаты и шрифты
   пересчитываются, поэтому оверлей не растягивается картинкой и остаётся чётким.
+- Если на GitHub есть новая версия, в меню появляется пункт `Обновить до vX.Y.Z`.
 - `Esc` закрывает оверлей.
 - `Ctrl+R` запускает ручное обновление с учётом минимальной паузы в 1 минуту.
+
+## Обновления
+
+Оверлей проверяет наличие новой версии при запуске и затем раз в сутки. Проверка
+идёт через публичные GitHub Releases проекта и не требует логина, токена или
+передачи приватных данных.
+
+Если новая версия найдена, в меню по правой кнопке появится строка вроде:
+
+```text
+Доступна v1.5.1
+Обновить до v1.5.1
+```
+
+После нажатия `Обновить до vX.Y.Z` запускается отдельный PowerShell-скрипт:
+
+```text
+scripts/update-and-restart.ps1
+```
+
+Для Git-установки скрипт скачивает свежий код через `git pull --ff-only`. Для
+ZIP-установки он скачивает ZIP новой версии с GitHub и раскладывает его поверх
+текущей папки, сохраняя `.venv` и локальные пользовательские данные вне проекта.
+После этого обновляется локальная установка пакета, пересоздаётся ярлык и
+оверлей запускается заново.
+
+Если Git-установка содержит локальные изменения в папке проекта, обновление
+останавливается, чтобы ничего не перезаписать.
 
 ## Полезные команды
 
 Установить:
+
+```text
+Install-NeuroGate-API.bat
+```
+
+Или через PowerShell:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
@@ -194,6 +249,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-once.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\check.ps1
 ```
 
+Собрать ZIP-архив для GitHub Releases:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1
+```
+
 ## Команда для Codex или Claude Code
 
 Короткая команда:
@@ -222,6 +283,7 @@ docs/AI_INSTALL_PROMPT.md
 
 ```text
 neurogate-overlay/
+  Install-NeuroGate-API.bat
   src/neurogate_usage_overlay/
     __main__.py          точка входа CLI
     browser_reader.py    чтение страницы через Playwright/Chrome
@@ -229,10 +291,13 @@ neurogate-overlay/
     models.py            модель данных лимитов
     overlay.py           Tkinter-интерфейс оверлея
     parser.py            парсер видимого текста страницы
+    update_checker.py    проверка новых версий через GitHub Releases
   scripts/
     install.ps1
     run-overlay.ps1
     run-once.ps1
+    update-and-restart.ps1
+    package-release.ps1
     create-desktop-shortcut.ps1
     check.ps1
   docs/
@@ -264,6 +329,20 @@ powershell -ExecutionPolicy Bypass -File .\scripts\check.ps1
   полосками прогресса.
 
 ## История изменений
+
+### 1.5.0 — 10-06-2026
+
+- Добавлена проверка новых версий через GitHub Releases при запуске и раз в сутки.
+- В меню по правой кнопке появляется пункт `Обновить до vX.Y.Z`, если доступна
+  новая версия.
+- Добавлен безопасный скрипт `scripts/update-and-restart.ps1`: он обновляет
+  проект через Git или ZIP-архив релиза, переустанавливает пакет, обновляет
+  ярлык и перезапускает оверлей.
+- Добавлен корневой установщик `Install-NeuroGate-API.bat` для обычной установки
+  из ZIP без нейросети и без Git.
+- Добавлен скрипт `scripts/package-release.ps1` для сборки ZIP-архива под GitHub Releases.
+- Обновление не выполняется молча и останавливается при локальных изменениях в
+  Git-установке.
 
 ### 1.4.0 — 09-06-2026
 

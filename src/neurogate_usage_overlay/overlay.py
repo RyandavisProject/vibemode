@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import math
 import json
+import subprocess
+import threading
 import tkinter as tk
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -9,6 +11,7 @@ from typing import Callable
 
 from .history import DailyUsageStore, spent_since_reset, window_key
 from .models import UsageSnapshot, UsageWindow
+from .update_checker import UpdateInfo, check_for_update
 
 
 SnapshotReader = Callable[[], UsageSnapshot]
@@ -70,6 +73,7 @@ class UsageOverlay:
     SCALE_LARGE = 2
     MIN_REFRESH_SECONDS = 60
     LOGIN_POLL_SECONDS = 2
+    UPDATE_CHECK_SECONDS = 24 * 60 * 60
     INTERVAL_CHOICES_MINUTES = (1, 3, 5, 10, 15, 60)
     UI_FONT = "Segoe UI Variable Small"
     TEXT_FONT = "Segoe UI Variable Text"
@@ -95,6 +99,8 @@ class UsageOverlay:
         self.after_id: str | None = None
         self.last_refresh_at: datetime | None = None
         self.last_snapshot: UsageSnapshot | None = None
+        self.update_info: UpdateInfo | None = None
+        self.update_check_running = False
         self.status_text = "обновление"
         self.drag_x = 0
         self.drag_y = 0
@@ -102,7 +108,7 @@ class UsageOverlay:
         self.tooltip_window: tk.Toplevel | None = None
 
         self.root = tk.Tk()
-        self.root.title("NeuroGate API 1.4.0")
+        self.root.title("NeuroGate API 1.5.0")
         self.root.geometry(self._initial_geometry())
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
@@ -123,6 +129,7 @@ class UsageOverlay:
         self._bind_window()
         self._render()
         self.root.after(200, self.refresh)
+        self.root.after(1200, self.check_for_updates)
 
     def _bind_window(self) -> None:
         self.root.bind("<ButtonPress-1>", self._start_drag)
@@ -239,7 +246,7 @@ class UsageOverlay:
         scale_label = "2x размер"
         checkbox_labels = {keep_browser_label, scale_label}
         rows: list[tuple[str, Callable[[], None] | None, bool]] = [
-            ("Обновить", lambda: self.refresh(force=True), False),
+            ("Обновить лимиты", lambda: self.refresh(force=True), False),
             ("", None, False),
             (
                 keep_browser_label,
@@ -260,9 +267,21 @@ class UsageOverlay:
                 )
                 for minutes in self.INTERVAL_CHOICES_MINUTES
             ],
-            ("", None, False),
-            ("Закрыть", self.close, False),
         ]
+        if self.update_info:
+            rows.extend(
+                [
+                    ("", None, False),
+                    (f"Доступна {self.update_info.latest_label}", None, False),
+                    (f"Обновить до {self.update_info.latest_label}", self._start_update, False),
+                ]
+            )
+        rows.extend(
+            [
+                ("", None, False),
+                ("Закрыть", self.close, False),
+            ]
+        )
         height = padding * 2 + sum(8 if not label else item_height for label, _command, _active in rows)
 
         menu = tk.Toplevel(self.root)
@@ -458,6 +477,53 @@ class UsageOverlay:
         self.canvas.configure(width=width, height=height)
         self.root.geometry(f"{width}x{height}+{x}+{y}")
         self._save_window_position()
+
+    def check_for_updates(self) -> None:
+        if self.update_check_running:
+            return
+        self.update_check_running = True
+
+        def run_check() -> None:
+            info = check_for_update()
+
+            def apply_result() -> None:
+                self.update_check_running = False
+                self.update_info = info
+                self._render()
+                self.root.after(self.UPDATE_CHECK_SECONDS * 1000, self.check_for_updates)
+
+            try:
+                self.root.after(0, apply_result)
+            except tk.TclError:
+                self.update_check_running = False
+
+        threading.Thread(target=run_check, daemon=True).start()
+
+    def _start_update(self) -> None:
+        if not self.update_info:
+            return
+        script = Path(__file__).resolve().parents[2] / "scripts" / "update-and-restart.ps1"
+        if not script.exists():
+            self._apply_error("скрипт обновления не найден")
+            return
+        try:
+            subprocess.Popen(
+                [
+                    "powershell.exe",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(script),
+                    "-TargetVersion",
+                    self.update_info.latest_label,
+                ],
+                cwd=str(script.parents[1]),
+                creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
+            )
+        except Exception as exc:  # noqa: BLE001 - show update launch errors in the overlay.
+            self._apply_error(exc)
+            return
+        self.close()
 
     def set_interval(self, minutes: int) -> None:
         self.interval_minutes = self._normalize_interval_minutes(minutes)

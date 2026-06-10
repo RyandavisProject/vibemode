@@ -2,9 +2,11 @@ import unittest
 import tempfile
 from datetime import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 from neurogate_usage_overlay.models import UsageSnapshot, UsageWindow
 from neurogate_usage_overlay.overlay import UsageOverlay
+from neurogate_usage_overlay.update_checker import UpdateInfo
 
 
 class FakeRoot:
@@ -232,6 +234,28 @@ class OverlayRenderTest(unittest.TestCase):
             )
         finally:
             overlay.close()
+
+
+class OverlayUpdateTest(unittest.TestCase):
+    def test_start_update_launches_update_script_with_target_version(self):
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        overlay.update_info = UpdateInfo(
+            current_version="1.5.0",
+            latest_version="1.5.1",
+            release_url="https://github.com/RyandavisProject/neurogate-overlay/releases/tag/v1.5.1",
+        )
+        closed = []
+        overlay.close = lambda: closed.append(True)
+        overlay._apply_error = lambda error: self.fail(f"unexpected update error: {error}")
+
+        with patch("neurogate_usage_overlay.overlay.subprocess.Popen") as popen:
+            overlay._start_update()
+
+        self.assertTrue(closed)
+        args = popen.call_args.args[0]
+        self.assertTrue(any(str(item).endswith("update-and-restart.ps1") for item in args))
+        self.assertIn("-TargetVersion", args)
+        self.assertIn("v1.5.1", args)
 
 
 if __name__ == "__main__":

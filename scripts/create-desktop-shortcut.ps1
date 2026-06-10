@@ -1,12 +1,14 @@
 param(
-    [string]$ShortcutName = "NeuroGate API"
+    [string]$ShortcutName = "NeuroGate API",
+    [string]$DesktopDir = ""
 )
 
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $RunScript = Join-Path $Root "scripts\run-overlay.ps1"
-$Desktop = [Environment]::GetFolderPath("Desktop")
+$Desktop = if ($DesktopDir) { $DesktopDir } else { [Environment]::GetFolderPath("Desktop") }
+New-Item -ItemType Directory -Path $Desktop -Force | Out-Null
 $ShortcutPath = Join-Path $Desktop "$ShortcutName.lnk"
 
 if ($ShortcutName -eq "NeuroGate API") {
