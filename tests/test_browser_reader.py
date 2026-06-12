@@ -1,5 +1,7 @@
 import unittest
+import tempfile
 from datetime import datetime
+from pathlib import Path
 from unittest.mock import patch
 
 from neurogate_usage_overlay.browser_reader import BrowserSettings, NeurogateUsageReader
@@ -94,7 +96,6 @@ class BrowserReaderModeTest(unittest.TestCase):
         reader._page = type("Page", (), {"url": reader.settings.usage_url})()
         reader._current_headless = True
         reader._wait_for_usage_text = lambda: "EMAIL\nПАРОЛЬ\nВойти"  # type: ignore[method-assign]
-        reader._click_login_action_if_available = lambda: None  # type: ignore[method-assign]
         reader._open_visible_login_window = lambda: None  # type: ignore[method-assign]
         reader._write_debug = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
 
@@ -104,47 +105,44 @@ class BrowserReaderModeTest(unittest.TestCase):
         self.assertFalse(snapshot.is_cached)
         self.assertEqual(snapshot.status_note, "нужен вход")
 
-    def test_visible_filled_login_form_is_submitted_automatically(self):
+    def test_visible_filled_login_form_is_not_submitted_automatically(self):
         reader = NeurogateUsageReader(BrowserSettings(headless=True))
         reader._page = type("Page", (), {"url": reader.settings.usage_url})()
         reader._current_headless = False
         reader._login_visible = True
-        calls = {"click": 0}
-        texts = iter(
-            [
-                "EMAIL\nПАРОЛЬ\nВойти",
-                """
-                КАБИНЕТ КЛИЕНТА
-                Лимиты
-                Подробная информация о Вашем тарифе
-                ascend
-                активен ещё 2 д 2 ч
-                5 часов
-                Сброс через 4 ч 58 мин
-                119 300 000
-                Кредитов осталось
-                7 дней
-                Сброс через 1 д 3 ч
-                289 100 000
-                Кредитов осталось
-                """,
-            ]
-        )
-
-        def click_login() -> bool:
-            calls["click"] += 1
-            return True
-
-        reader._wait_for_usage_text = lambda: next(texts)  # type: ignore[method-assign]
-        reader._click_login_action_if_available = click_login  # type: ignore[method-assign]
+        reader._wait_for_usage_text = lambda: "EMAIL\nПАРОЛЬ\nВойти"  # type: ignore[method-assign]
         reader._attach_window_progress = lambda _snapshot: None  # type: ignore[method-assign]
         reader._hide_visible_browser_after_success = lambda: None  # type: ignore[method-assign]
         reader._write_debug = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
 
         snapshot = reader.read()
 
-        self.assertEqual(calls["click"], 1)
-        self.assertTrue(snapshot.has_data)
+        self.assertFalse(snapshot.has_data)
+        self.assertEqual(snapshot.status_note, "нужен вход")
+
+    def test_reset_account_session_removes_profile_and_opens_login(self):
+        with tempfile.TemporaryDirectory() as directory:
+            profile_dir = Path(directory) / "browser-profile"
+            profile_dir.mkdir()
+            (profile_dir / "session.txt").write_text("local session", encoding="utf-8")
+            reader = NeurogateUsageReader(BrowserSettings(profile_dir=profile_dir, headless=True))
+            reader._playwright = object()
+            reader._context = type("Context", (), {"close": lambda _self: None})()
+            launches: list[bool] = []
+
+            def fake_launch_context(*, headless: bool) -> None:
+                launches.append(headless)
+                reader._current_headless = headless
+
+            reader._launch_context = fake_launch_context  # type: ignore[method-assign]
+            reader._write_debug = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+
+            reader.reset_account_session()
+
+            self.assertFalse((profile_dir / "session.txt").exists())
+            self.assertEqual(launches, [False])
+            self.assertTrue(reader._login_prompt_opened)
+            self.assertTrue(reader._login_visible)
 
     def test_attach_window_progress_clamps_site_percent(self):
         reader = NeurogateUsageReader(BrowserSettings())

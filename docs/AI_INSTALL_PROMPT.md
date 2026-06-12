@@ -17,10 +17,14 @@ Rules:
 - Do not collect, print, or store credentials.
 - The user must log in directly on the NeuroGate website if Chrome
   opens a login page.
+- Do not click the NeuroGate login button for the user and do not rely on
+  saved autofill credentials.
 - After login succeeds, the visible Chrome window should hide automatically
   and future overlay updates should continue from the same local browser session.
 - The right-click menu has `Не закрывать ЛК` for users who temporarily want to
   keep the account page visible. Turning it off hides that visible window.
+- The right-click menu also has `Сменить аккаунт`. It clears only the overlay's
+  local browser profile and opens a fresh login window.
 - Do not upload local browser profiles, cookies, logs, screenshots, or API keys.
 - Do not push to GitHub unless the user explicitly asks.
 

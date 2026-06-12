@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -182,14 +183,8 @@ class NeurogateUsageReader:
             self._page.goto(self.settings.usage_url, wait_until="domcontentloaded")
         text = self._wait_for_usage_text()
         if self._is_login_text(text) and self._current_headless and self.settings.show_browser_on_login:
-            self._click_login_action_if_available()
-            text = self._wait_for_usage_text()
-            if self._is_login_text(text):
-                if not self._login_prompt_opened:
-                    self._open_visible_login_window()
-                    text = self._wait_for_usage_text()
-        if self._is_login_text(text) and self._current_headless is False:
-            if self._click_login_action_if_available():
+            if not self._login_prompt_opened:
+                self._open_visible_login_window()
                 text = self._wait_for_usage_text()
         snapshot = parse_usage_text(text, source_url=self._page.url)
         self._attach_window_progress(snapshot)
@@ -229,49 +224,22 @@ class NeurogateUsageReader:
         except Exception:
             pass
 
-    def _click_login_action_if_available(self) -> bool:
-        assert self._page is not None
-        candidates = (
-            ("Connect Codex", False),
-            ("Войти", True),
-            ("Sign in", True),
-            ("Log in", True),
-        )
-        for label, needs_credentials in candidates:
-            try:
-                if needs_credentials and not self._login_form_has_filled_credentials():
-                    continue
-                button = self._page.get_by_text(label, exact=False).first
-                if button.count() > 0 and button.is_visible(timeout=600):
-                    button.click(timeout=1500)
-                    self._page.wait_for_timeout(1200)
-                    return True
-            except Exception:
-                pass
-        return False
-
-    def _login_form_has_filled_credentials(self) -> bool:
-        assert self._page is not None
+    def reset_account_session(self) -> None:
+        self._write_debug(parse_usage_text("", source_url=self.settings.usage_url), note="reset_account_session")
+        self._close_context()
+        if self.settings.profile_dir.exists():
+            shutil.rmtree(self.settings.profile_dir)
+        self._login_prompt_opened = True
+        self._login_visible = True
+        if not self._playwright:
+            self.start()
+            self._close_context()
+        self._launch_context(headless=False)
         try:
-            return bool(
-                self._page.evaluate(
-                    """() => {
-                        const email = document.querySelector(
-                            'input[type="email"], input[name*="email" i], input[autocomplete="email"]'
-                        );
-                        const password = document.querySelector(
-                            'input[type="password"], input[name*="password" i], input[autocomplete="current-password"]'
-                        );
-                        return Boolean(
-                            email && password &&
-                            String(email.value || "").trim() &&
-                            String(password.value || "").trim()
-                        );
-                    }"""
-                )
-            )
+            assert self._page is not None
+            self._page.bring_to_front()
         except Exception:
-            return False
+            pass
 
     def _hide_visible_browser_after_success(self) -> None:
         if (

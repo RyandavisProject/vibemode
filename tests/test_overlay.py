@@ -236,6 +236,27 @@ class OverlayRenderTest(unittest.TestCase):
             overlay.close()
 
 
+class OverlayAccountTest(unittest.TestCase):
+    def test_reset_account_runs_resetter_and_marks_login_needed(self):
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        calls = []
+        renders = []
+        overlay.account_resetter = lambda: calls.append(True)
+        overlay.root = FakeRoot()
+        overlay.after_id = None
+        overlay.interval_minutes = 1
+        overlay._render = lambda: renders.append(True)
+        overlay._apply_error = lambda error: self.fail(f"unexpected reset error: {error}")
+
+        overlay._reset_account()
+
+        self.assertEqual(calls, [True])
+        self.assertEqual(renders, [True])
+        self.assertEqual(overlay.status_text, "нужен вход")
+        self.assertEqual(overlay.last_snapshot.status_note, "нужен вход")
+        self.assertEqual(overlay.root.after_calls, [UsageOverlay.LOGIN_POLL_SECONDS * 1000])
+
+
 class OverlayUpdateTest(unittest.TestCase):
     def test_start_update_launches_update_script_with_target_version(self):
         overlay = UsageOverlay.__new__(UsageOverlay)

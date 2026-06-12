@@ -17,6 +17,7 @@ from .update_checker import UpdateInfo, check_for_update
 SnapshotReader = Callable[[], UsageSnapshot]
 KeepBrowserGetter = Callable[[], bool]
 KeepBrowserSetter = Callable[[bool], None]
+AccountResetter = Callable[[], None]
 
 
 def short_number(value: int | None) -> str:
@@ -85,10 +86,12 @@ class UsageOverlay:
         interval_seconds: int = 60,
         keep_browser_open_getter: KeepBrowserGetter | None = None,
         keep_browser_open_setter: KeepBrowserSetter | None = None,
+        account_resetter: AccountResetter | None = None,
     ) -> None:
         self.reader = reader
         self.keep_browser_open_getter = keep_browser_open_getter
         self.keep_browser_open_setter = keep_browser_open_setter
+        self.account_resetter = account_resetter
         self.debug_log = Path.home() / ".neurogate-usage-overlay" / "overlay-ui.log"
         self.state_file = Path.home() / ".neurogate-usage-overlay" / "overlay-state.json"
         self.daily_usage = DailyUsageStore(Path.home() / ".neurogate-usage-overlay" / "usage-daily.json")
@@ -108,7 +111,7 @@ class UsageOverlay:
         self.tooltip_window: tk.Toplevel | None = None
 
         self.root = tk.Tk()
-        self.root.title("NeuroGate API 1.5.0")
+        self.root.title("NeuroGate API 1.5.1")
         self.root.geometry(self._initial_geometry())
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
@@ -247,6 +250,8 @@ class UsageOverlay:
         checkbox_labels = {keep_browser_label, scale_label}
         rows: list[tuple[str, Callable[[], None] | None, bool]] = [
             ("Обновить лимиты", lambda: self.refresh(force=True), False),
+            ("", None, False),
+            ("Сменить аккаунт", self._reset_account if self.account_resetter else None, False),
             ("", None, False),
             (
                 keep_browser_label,
@@ -477,6 +482,19 @@ class UsageOverlay:
         self.canvas.configure(width=width, height=height)
         self.root.geometry(f"{width}x{height}+{x}+{y}")
         self._save_window_position()
+
+    def _reset_account(self) -> None:
+        if not self.account_resetter:
+            return
+        try:
+            self.account_resetter()
+        except Exception as exc:  # noqa: BLE001 - show reset errors without crashing the overlay.
+            self._apply_error(exc)
+            return
+        self.last_snapshot = UsageSnapshot(updated_at=datetime.now().astimezone(), status_note="нужен вход")
+        self.status_text = "нужен вход"
+        self._schedule_next_refresh()
+        self._render()
 
     def check_for_updates(self) -> None:
         if self.update_check_running:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "neurogate-overlay"
-version = "1.5.0"
+version = "1.5.1"
 description = "Small Windows always-on-top overlay for NeuroGate API usage limits."
 readme = "README.md"
 requires-python = ">=3.10"

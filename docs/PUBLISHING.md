@@ -31,7 +31,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1
 The ZIP is created in `dist/`, for example:
 
 ```text
-dist\neurogate-overlay-v1.5.0.zip
+dist\neurogate-overlay-vX.Y.Z.zip
 ```
 
 ## 3. Review Public Docs

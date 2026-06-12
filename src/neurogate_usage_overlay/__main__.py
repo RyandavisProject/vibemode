@@ -56,6 +56,7 @@ def main() -> int:
             interval_seconds=args.interval,
             keep_browser_open_getter=lambda: reader.keep_browser_open,
             keep_browser_open_setter=reader.set_keep_browser_open,
+            account_resetter=reader.reset_account_session,
         )
         overlay.run()
         return 0
