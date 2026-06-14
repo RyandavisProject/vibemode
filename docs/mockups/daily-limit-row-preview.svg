@@ -63,8 +63,8 @@
     <text class="caption" x="0" y="-24">1. До 50% дневного лимита — обычный синий стиль</text>
     <g transform="scale(2.55)">
       <use href="#overlayBase"/>
-      <text class="overlayText muted" x="10" y="77" font-size="8.8">лимит на день</text>
-      <text class="overlayText orange" x="80" y="78" font-size="11.8" font-weight="700">24.0M / 339.3M</text>
+      <text class="overlayText muted" x="10" y="77" font-size="8.8">лимит/день</text>
+      <text class="overlayText orange" x="80" y="78" font-size="11.8" font-weight="700">24.0M / 82.0M</text>
       <rect class="track" x="30" y="86" width="184" height="4" rx="2"/>
       <rect class="blue" x="30" y="86" width="54" height="4" rx="2"/>
     </g>
@@ -75,8 +75,8 @@
     <text class="caption" x="0" y="-24">2. После 50% — плавный уход к предупреждающему цвету</text>
     <g transform="scale(2.55)">
       <use href="#overlayBase"/>
-      <text class="overlayText muted" x="10" y="77" font-size="8.8">лимит на день</text>
-      <text class="overlayText orange" x="80" y="78" font-size="11.8" font-weight="700">63.0M / 339.3M</text>
+      <text class="overlayText muted" x="10" y="77" font-size="8.8">лимит/день</text>
+      <text class="overlayText orange" x="80" y="78" font-size="11.8" font-weight="700">63.0M / 82.0M</text>
       <rect class="track" x="30" y="86" width="184" height="4" rx="2"/>
       <rect fill="url(#warnBar)" x="30" y="86" width="141" height="4" rx="2"/>
     </g>
@@ -87,8 +87,8 @@
     <text class="caption" x="0" y="-24">3. 100% и выше — красная полоса и свечение</text>
     <g transform="scale(2.55)">
       <use href="#overlayBase"/>
-      <text class="overlayText muted" x="10" y="77" font-size="8.8">лимит на день</text>
-      <text class="overlayText red" x="80" y="78" font-size="11.8" font-weight="700">84.0M / 339.3M</text>
+      <text class="overlayText muted" x="10" y="77" font-size="8.8">лимит/день</text>
+      <text class="overlayText red" x="80" y="78" font-size="11.8" font-weight="700">84.0M / 82.0M</text>
       <rect class="track" x="30" y="86" width="184" height="4" rx="2"/>
       <rect fill="url(#hotBar)" x="30" y="86" width="184" height="4" rx="2" filter="url(#redGlow)"/>
     </g>
@@ -99,18 +99,18 @@
     <text class="caption" x="0" y="-24">4. Подсказка при наведении</text>
     <g transform="scale(2.55)">
       <use href="#overlayBase"/>
-      <text class="overlayText muted" x="10" y="77" font-size="8.8">лимит на день</text>
-      <text class="overlayText orange" x="80" y="78" font-size="11.8" font-weight="700">10.9M / 339.3M</text>
+      <text class="overlayText muted" x="10" y="77" font-size="8.8">лимит/день</text>
+      <text class="overlayText orange" x="80" y="78" font-size="11.8" font-weight="700">10.9M / 82.0M</text>
       <rect class="track" x="30" y="86" width="184" height="4" rx="2"/>
       <rect class="blue" x="30" y="86" width="24" height="4" rx="2"/>
       <rect class="tooltip" x="92" y="47" width="93" height="17" rx="5"/>
       <text class="overlayText muted" x="98" y="58.5" font-size="7.6">не падаем ниже 339.3M</text>
     </g>
-    <text class="small" x="0" y="266">Вторая цифра: нижняя граница 7д остатка. Здесь: 421.3M - 82M = 339.3M.</text>
+    <text class="small" x="0" y="266">Подсказка: 7д остаток - дневной лимит. Здесь: 421.3M - 82M = 339.3M.</text>
   </g>
 
   <g transform="translate(54 815)">
     <rect x="0" y="-22" width="1190" height="1" fill="#d8dee8"/>
-    <text class="small" x="0" y="0">Логика цвета: до 50% синий, 50-99% градиент к красному, 100%+ красный. Логика числа: потрачено сегодня / нижняя граница 7д остатка.</text>
+    <text class="small" x="0" y="0">Логика цвета: до 50% синий, 50-99% градиент к красному, 100%+ красный. Логика числа: потрачено сегодня / заданный дневной лимит.</text>
   </g>
 </svg>

@@ -17,6 +17,8 @@ class UpdateInfo:
     current_version: str
     latest_version: str
     release_url: str
+    release_zip_url: str | None = None
+    release_sha256: str | None = None
 
     @property
     def latest_label(self) -> str:
@@ -53,6 +55,32 @@ def is_newer_version(candidate: str, current: str) -> bool:
     return left + (0,) * (length - len(left)) > right + (0,) * (length - len(right))
 
 
+def _release_asset_info(payload: dict[str, object]) -> tuple[str | None, str | None]:
+    assets = payload.get("assets")
+    if not isinstance(assets, list):
+        return None, None
+
+    zip_asset: dict[str, object] | None = None
+    for item in assets:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").lower()
+        url = str(item.get("browser_download_url") or "")
+        if not url or not name.endswith(".zip"):
+            continue
+        if zip_asset is None or "neurogate-overlay" in name:
+            zip_asset = item
+        if "neurogate-overlay" in name:
+            break
+
+    if not zip_asset:
+        return None, None
+
+    digest = str(zip_asset.get("digest") or "")
+    sha256 = digest.split(":", 1)[1] if digest.lower().startswith("sha256:") else None
+    return str(zip_asset.get("browser_download_url") or "") or None, sha256
+
+
 def check_for_update(
     current_version: str = __version__,
     api_url: str | None = None,
@@ -78,8 +106,11 @@ def check_for_update(
         return None
     if not is_newer_version(latest_version, current_version):
         return None
+    release_zip_url, release_sha256 = _release_asset_info(payload)
     return UpdateInfo(
         current_version=normalize_version(current_version),
         latest_version=latest_version,
         release_url=release_url,
+        release_zip_url=release_zip_url,
+        release_sha256=release_sha256,
     )

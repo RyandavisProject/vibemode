@@ -19,3 +19,28 @@ class SingleInstanceLockTest(unittest.TestCase):
 
             self.assertTrue(second.acquire())
             second.release()
+
+    def test_existing_non_empty_lock_file_still_rejects_second_lock(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lock_path = Path(directory) / "overlay.lock"
+            lock_path.write_text("previous run", encoding="utf-8")
+            first = SingleInstanceLock(lock_path)
+            second = SingleInstanceLock(lock_path)
+
+            self.assertTrue(first.acquire())
+            try:
+                self.assertFalse(second.acquire())
+            finally:
+                first.release()
+
+    def test_context_manager_raises_when_lock_is_busy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            lock_path = Path(directory) / "overlay.lock"
+            first = SingleInstanceLock(lock_path)
+            self.assertTrue(first.acquire())
+            try:
+                with self.assertRaises(RuntimeError):
+                    with SingleInstanceLock(lock_path):
+                        pass
+            finally:
+                first.release()

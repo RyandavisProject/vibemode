@@ -4,7 +4,12 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
-from neurogate_usage_overlay.browser_reader import BrowserSettings, NeurogateUsageReader
+from neurogate_usage_overlay.browser_reader import (
+    AUTO_LOGIN_DELAY_ATTEMPTS,
+    LOGIN_PROMPT_CONFIRM_ATTEMPTS,
+    BrowserSettings,
+    NeurogateUsageReader,
+)
 from neurogate_usage_overlay.models import UsageSnapshot, UsageWindow
 
 
@@ -80,6 +85,23 @@ class BrowserReaderModeTest(unittest.TestCase):
 
         self.assertIn("--window-position=96,80", args)
         self.assertIn("--window-size=1180,860", args)
+
+    def test_debug_log_does_not_store_raw_portal_text(self):
+        with tempfile.TemporaryDirectory() as directory:
+            debug_log = Path(directory) / "debug.log"
+            reader = NeurogateUsageReader(BrowserSettings(debug_log=debug_log))
+            snapshot = UsageSnapshot(
+                updated_at=datetime.now(),
+                account="ascend",
+                raw_text="SECRET PORTAL TEXT WITH EMAIL user@example.com",
+            )
+
+            reader._write_debug(snapshot, note="test")
+
+            content = debug_log.read_text(encoding="utf-8")
+            self.assertIn("text_len=", content)
+            self.assertNotIn("SECRET PORTAL TEXT", content)
+            self.assertNotIn("user@example.com", content)
 
     def test_hidden_taskbar_hider_uses_profile_browser_pids(self):
         reader = NeurogateUsageReader(BrowserSettings())
@@ -274,6 +296,30 @@ class BrowserReaderModeTest(unittest.TestCase):
         self.assertTrue(snapshot.has_data)
         self.assertEqual(opens, 0)
 
+    def test_wait_for_usage_text_returns_login_prompt_quickly(self):
+        reader = NeurogateUsageReader(BrowserSettings(headless=True))
+        attempts = 0
+
+        class Locator:
+            def inner_text(self, timeout: int) -> str:
+                nonlocal attempts
+                attempts += 1
+                return "EMAIL\nПАРОЛЬ\nВойти"
+
+        class Page:
+            def wait_for_timeout(self, _timeout: int) -> None:
+                return None
+
+            def locator(self, _selector: str) -> Locator:
+                return Locator()
+
+        reader._page = Page()
+
+        text = reader._wait_for_usage_text()
+
+        self.assertIn("EMAIL", text)
+        self.assertEqual(attempts, LOGIN_PROMPT_CONFIRM_ATTEMPTS)
+
     def test_successful_visible_login_hides_current_window(self):
         reader = NeurogateUsageReader(BrowserSettings(headless=True))
         reader._current_headless = False
@@ -392,7 +438,7 @@ class BrowserReaderModeTest(unittest.TestCase):
 
         self.assertTrue(submitted)
         self.assertEqual(clicks, 1)
-        self.assertGreaterEqual(waits, 16)
+        self.assertEqual(waits, AUTO_LOGIN_DELAY_ATTEMPTS + 1)
 
     def test_auto_login_is_blocked_during_account_switch(self):
         reader = NeurogateUsageReader(BrowserSettings(headless=True))

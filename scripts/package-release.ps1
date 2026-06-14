@@ -22,8 +22,22 @@ $PackageName = "neurogate-overlay-v$Version"
 $TempRoot = Join-Path ([System.IO.Path]::GetTempPath()) "neurogate-overlay-package-$([System.Guid]::NewGuid())"
 $Stage = Join-Path $TempRoot $PackageName
 $ZipPath = Join-Path $OutputDir "$PackageName.zip"
+$ChecksumPath = "$ZipPath.sha256"
 $SkipDirs = @(".git", ".venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "dist", "build")
+$SkipDirPatterns = @("dist-*")
 $SkipFilePatterns = @("*.pyc", "*.pyo", "*.pyd", "*.log", "*.trace.zip", "*.har", "*.cookies", "*.local.json")
+
+function Test-SkippedDirectory($Name) {
+    if ($SkipDirs -contains $Name -or $Name.EndsWith(".egg-info")) {
+        return $true
+    }
+    foreach ($Pattern in $SkipDirPatterns) {
+        if ($Name -like $Pattern) {
+            return $true
+        }
+    }
+    return $false
+}
 
 function Test-SkippedFile($Name) {
     foreach ($Pattern in $SkipFilePatterns) {
@@ -39,7 +53,7 @@ function Copy-PackageTree($Source, $Destination) {
     Get-ChildItem -LiteralPath $Source -Force |
         ForEach-Object {
             if ($_.PSIsContainer) {
-                if ($SkipDirs -contains $_.Name -or $_.Name.EndsWith(".egg-info")) {
+                if (Test-SkippedDirectory $_.Name) {
                     return
                 }
                 Copy-PackageTree $_.FullName (Join-Path $Destination $_.Name)
@@ -62,8 +76,14 @@ try {
     if (Test-Path $ZipPath) {
         Remove-Item -LiteralPath $ZipPath -Force
     }
+    if (Test-Path $ChecksumPath) {
+        Remove-Item -LiteralPath $ChecksumPath -Force
+    }
     Compress-Archive -Path $Stage -DestinationPath $ZipPath -Force
+    $Hash = (Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    "$Hash  $(Split-Path -Leaf $ZipPath)" | Set-Content -LiteralPath $ChecksumPath -Encoding utf8
     Write-Host "Release ZIP created: $ZipPath"
+    Write-Host "SHA256 file created: $ChecksumPath"
 } finally {
     if (Test-Path $TempRoot) {
         Remove-Item -LiteralPath $TempRoot -Recurse -Force -ErrorAction SilentlyContinue

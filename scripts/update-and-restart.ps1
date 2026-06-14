@@ -3,7 +3,8 @@ param(
     [switch]$NoRestart,
     [switch]$NoShortcut,
     [string]$ShortcutDir = "",
-    [string]$ReleaseZipUrl = ""
+    [string]$ReleaseZipUrl = "",
+    [string]$ReleaseSha256 = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -27,21 +28,130 @@ function Invoke-Native($Command, [string[]]$Arguments) {
     }
 }
 
-function Copy-ReleaseTree($SourceDir, $TargetDir) {
-    $SkipNames = @(".git", ".venv", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "dist", "build")
-    Get-ChildItem -LiteralPath $SourceDir -Force |
-        Where-Object { $SkipNames -notcontains $_.Name } |
-        ForEach-Object {
-            $Destination = Join-Path $TargetDir $_.Name
-            if ($_.PSIsContainer) {
-                if (Test-Path $Destination) {
-                    Remove-Item -LiteralPath $Destination -Recurse -Force
-                }
-                Copy-Item -LiteralPath $_.FullName -Destination $Destination -Recurse -Force
-            } else {
-                Copy-Item -LiteralPath $_.FullName -Destination $Destination -Force
-            }
+function Normalize-Sha256($Value) {
+    if (-not $Value) {
+        return ""
+    }
+    $FirstToken = ($Value -split '\s+')[0]
+    return $FirstToken.Trim().ToLowerInvariant()
+}
+
+function Get-ReleaseSha256($ArchiveUrl, $ZipPath) {
+    if ($ReleaseSha256) {
+        return Normalize-Sha256 $ReleaseSha256
+    }
+    if ($env:NEUROGATE_UPDATE_SHA256) {
+        return Normalize-Sha256 $env:NEUROGATE_UPDATE_SHA256
+    }
+
+    $SidecarPath = "$ZipPath.sha256"
+    if (Test-Path $ArchiveUrl) {
+        $LocalSidecar = "$ArchiveUrl.sha256"
+        if (Test-Path $LocalSidecar) {
+            Copy-Item -LiteralPath $LocalSidecar -Destination $SidecarPath -Force
+            return Normalize-Sha256 (Get-Content -LiteralPath $SidecarPath -Raw)
         }
+        return ""
+    }
+
+    try {
+        Invoke-WebRequest -Uri "$ArchiveUrl.sha256" -OutFile $SidecarPath -UseBasicParsing
+        return Normalize-Sha256 (Get-Content -LiteralPath $SidecarPath -Raw)
+    } catch {
+        return ""
+    }
+}
+
+function Confirm-ReleaseSha256($ZipPath, $ExpectedHash) {
+    $Expected = Normalize-Sha256 $ExpectedHash
+    if (-not $Expected) {
+        Write-Host "SHA256 checksum was not provided; continuing without archive integrity verification." -ForegroundColor Yellow
+        return
+    }
+    if ($Expected -notmatch '^[0-9a-f]{64}$') {
+        throw "Invalid SHA256 checksum format."
+    }
+    $Actual = (Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($Actual -ne $Expected) {
+        throw "ZIP checksum mismatch. Expected $Expected but got $Actual."
+    }
+    Write-Step "ZIP checksum verified."
+}
+
+function Assert-UnderDirectory($Path, $Directory) {
+    $Base = [System.IO.Path]::GetFullPath($Directory).TrimEnd('\')
+    $Full = [System.IO.Path]::GetFullPath($Path)
+    if (-not ($Full.Equals($Base, [System.StringComparison]::OrdinalIgnoreCase) -or $Full.StartsWith("$Base\", [System.StringComparison]::OrdinalIgnoreCase))) {
+        throw "Refusing to modify path outside project directory: $Full"
+    }
+}
+
+function Copy-ReleaseItem($Source, $Destination, $TargetDir) {
+    Assert-UnderDirectory $Destination $TargetDir
+    $Parent = Split-Path -Parent $Destination
+    if ($Parent) {
+        New-Item -ItemType Directory -Path $Parent -Force | Out-Null
+    }
+    if (Test-Path $Destination) {
+        Remove-Item -LiteralPath $Destination -Recurse -Force
+    }
+    Copy-Item -LiteralPath $Source -Destination $Destination -Recurse -Force
+}
+
+function Restore-ReleaseBackup($BackupDir, $TargetDir, [string[]]$TouchedItems) {
+    foreach ($Name in $TouchedItems) {
+        $Destination = Join-Path $TargetDir $Name
+        Assert-UnderDirectory $Destination $TargetDir
+        if (Test-Path $Destination) {
+            Remove-Item -LiteralPath $Destination -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        $BackupItem = Join-Path $BackupDir $Name
+        if (Test-Path $BackupItem) {
+            Copy-Item -LiteralPath $BackupItem -Destination $Destination -Recurse -Force
+        }
+    }
+}
+
+function Copy-ReleaseTree($SourceDir, $TargetDir) {
+    $AllowedItems = @(
+        "src",
+        "scripts",
+        "docs",
+        "tests",
+        "README.md",
+        "CHANGELOG.md",
+        "LICENSE",
+        "SECURITY.md",
+        "pyproject.toml",
+        "Install-NeuroGate-API.bat"
+    )
+    $BackupDir = Join-Path ([System.IO.Path]::GetTempPath()) "neurogate-overlay-backup-$([System.Guid]::NewGuid())"
+    $TouchedItems = New-Object System.Collections.Generic.List[string]
+
+    try {
+        New-Item -ItemType Directory -Path $BackupDir -Force | Out-Null
+        foreach ($Name in $AllowedItems) {
+            $Source = Join-Path $SourceDir $Name
+            if (-not (Test-Path $Source)) {
+                continue
+            }
+            $Destination = Join-Path $TargetDir $Name
+            Assert-UnderDirectory $Destination $TargetDir
+            $TouchedItems.Add($Name)
+            if (Test-Path $Destination) {
+                Copy-Item -LiteralPath $Destination -Destination (Join-Path $BackupDir $Name) -Recurse -Force
+            }
+            Copy-ReleaseItem $Source $Destination $TargetDir
+        }
+    } catch {
+        Write-Host "Rolling back ZIP update..." -ForegroundColor Yellow
+        Restore-ReleaseBackup $BackupDir $TargetDir $TouchedItems.ToArray()
+        throw
+    } finally {
+        if (Test-Path $BackupDir) {
+            Remove-Item -LiteralPath $BackupDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 function Update-FromGit {
@@ -93,6 +203,7 @@ function Update-FromZipRelease {
         } else {
             Invoke-WebRequest -Uri $ArchiveUrl -OutFile $ZipPath -UseBasicParsing
         }
+        Confirm-ReleaseSha256 $ZipPath (Get-ReleaseSha256 $ArchiveUrl $ZipPath)
 
         Write-Step "Extracting update..."
         Expand-Archive -LiteralPath $ZipPath -DestinationPath $ExtractPath -Force

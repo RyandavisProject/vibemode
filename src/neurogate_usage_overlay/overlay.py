@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import json
+import re
 import subprocess
 import threading
 import tkinter as tk
@@ -9,7 +10,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
-from .history import DailyUsageStore, spent_since_reset, window_key
+from .history import DailyUsageStore, find_window, spent_since_reset, window_key
+from .log_utils import append_bounded_log
 from .models import UsageSnapshot, UsageWindow
 from .update_checker import UpdateInfo, check_for_update
 
@@ -36,6 +38,20 @@ def format_credits(value: int | None) -> str:
     if value is None:
         return "-"
     return short_number(value)
+
+
+def short_number_clean(value: int | None) -> str:
+    return short_number(value).replace(".0B", "B").replace(".0M", "M").replace(".0K", "K")
+
+
+def compact_percent(value: float | None) -> str:
+    if value is None:
+        return "-"
+    if value >= 100:
+        return f"{round(value):.0f}%"
+    if value >= 10:
+        return f"{value:.0f}%"
+    return f"{value:.1f}%"
 
 
 def compact_reset_text(value: str | None) -> str:
@@ -70,6 +86,8 @@ def compact_plan_status(value: str | None) -> str:
 class UsageOverlay:
     WIDTH = 222
     HEIGHT = 70
+    DAILY_LIMIT_HEIGHT = 92
+    DAILY_LIMIT_TTL = timedelta(hours=24)
     SCALE_NORMAL = 1
     SCALE_LARGE = 2
     MIN_REFRESH_SECONDS = 60
@@ -77,6 +95,8 @@ class UsageOverlay:
     TRANSIENT_FAILURE_CONFIRMATIONS = 3
     TRANSIENT_FAILURE_GRACE_SECONDS = 30
     UPDATE_CHECK_SECONDS = 24 * 60 * 60
+    RESUME_HEARTBEAT_SECONDS = 30
+    RESUME_GAP_SECONDS = 120
     INTERVAL_CHOICES_MINUTES = (1, 3, 5, 10, 15, 60)
     UI_FONT = "Segoe UI Variable Small"
     TEXT_FONT = "Segoe UI Variable Text"
@@ -89,20 +109,26 @@ class UsageOverlay:
         keep_browser_open_getter: KeepBrowserGetter | None = None,
         keep_browser_open_setter: KeepBrowserSetter | None = None,
         account_resetter: AccountResetter | None = None,
+        async_refresh: bool = False,
     ) -> None:
         self.reader = reader
         self.keep_browser_open_getter = keep_browser_open_getter
         self.keep_browser_open_setter = keep_browser_open_setter
         self.account_resetter = account_resetter
+        self.async_refresh = async_refresh
         self.debug_log = Path.home() / ".neurogate-usage-overlay" / "overlay-ui.log"
         self.state_file = Path.home() / ".neurogate-usage-overlay" / "overlay-state.json"
         self.daily_usage = DailyUsageStore(Path.home() / ".neurogate-usage-overlay" / "usage-daily.json")
         default_interval = self._normalize_interval_minutes(math.ceil(interval_seconds / 60))
         self.interval_minutes = self._load_interval_minutes(default_interval)
         self.ui_scale = self._load_ui_scale()
+        self.daily_limit_set_at = self._load_daily_limit_set_at()
+        self.daily_limit_credits = self._load_daily_limit_credits()
         self.refreshing = False
         self.after_id: str | None = None
+        self.resume_after_id: str | None = None
         self.last_refresh_at: datetime | None = None
+        self.last_resume_check_at: datetime | None = None
         self.last_snapshot: UsageSnapshot | None = None
         self.transient_failure_since: datetime | None = None
         self.transient_failure_count = 0
@@ -114,9 +140,10 @@ class UsageOverlay:
         self.drag_y = 0
         self.menu_window: tk.Toplevel | None = None
         self.tooltip_window: tk.Toplevel | None = None
+        self.position_after_id: str | None = None
 
         self.root = tk.Tk()
-        self.root.title("NeuroGate API 1.6.0")
+        self.root.title("NeuroGate API 1.7.0")
         self.root.geometry(self._initial_geometry())
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
@@ -138,12 +165,14 @@ class UsageOverlay:
         self._render()
         self.root.after(200, self.refresh)
         self.root.after(1200, self.check_for_updates)
+        self._schedule_resume_watchdog()
 
     def _bind_window(self) -> None:
         self.root.bind("<ButtonPress-1>", self._start_drag)
         self.root.bind("<B1-Motion>", self._drag)
         self.root.bind("<ButtonRelease-1>", self._end_drag)
         self.root.bind("<Button-3>", self._show_menu)
+        self.root.bind("<Configure>", self._remember_window_position_soon)
         self.root.bind("<Escape>", lambda _event: self.close())
         self.root.bind("<Control-r>", lambda _event: self.refresh(force=True))
         self.canvas.tag_bind("interval", "<Button-1>", lambda _event: self._cycle_interval())
@@ -173,7 +202,10 @@ class UsageOverlay:
         return self.WIDTH * self._current_scale()
 
     def _scaled_height(self) -> int:
-        return self.HEIGHT * self._current_scale()
+        return self._content_height() * self._current_scale()
+
+    def _content_height(self) -> int:
+        return self.DAILY_LIMIT_HEIGHT if self._daily_limit_enabled() else self.HEIGHT
 
     def _s(self, value: float) -> int:
         return int(round(value * self._current_scale()))
@@ -225,17 +257,75 @@ class UsageOverlay:
     def _save_ui_scale(self) -> None:
         self._save_state({"ui_scale": self.ui_scale})
 
+    def _load_daily_limit_credits(self) -> int | None:
+        try:
+            payload = self._load_state()
+            value = int(payload.get("daily_limit_credits") or 0)
+            if 0 < value < 1_000_000:
+                value *= 1_000_000
+            return value if value > 0 else None
+        except Exception:
+            return None
+
+    def _load_daily_limit_set_at(self) -> datetime | None:
+        try:
+            payload = self._load_state()
+            value = payload.get("daily_limit_set_at")
+            if not isinstance(value, str):
+                return None
+            parsed = datetime.fromisoformat(value)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=datetime.now().astimezone().tzinfo)
+            return parsed
+        except Exception:
+            return None
+
+    def _save_daily_limit_credits(self) -> None:
+        self._save_state(
+            {
+                "daily_limit_credits": self.daily_limit_credits or None,
+                "daily_limit_set_at": self.daily_limit_set_at.isoformat(timespec="seconds")
+                if self.daily_limit_credits and self.daily_limit_set_at
+                else None,
+            }
+        )
+
+    def _daily_limit_enabled(self) -> bool:
+        return bool(getattr(self, "daily_limit_credits", None)) and not self._daily_limit_expired()
+
+    def _daily_limit_expired(self) -> bool:
+        set_at = getattr(self, "daily_limit_set_at", None)
+        if not getattr(self, "daily_limit_credits", None) or not set_at:
+            return False
+        return datetime.now().astimezone() - set_at >= self.DAILY_LIMIT_TTL
+
+    def _expire_daily_limit_if_needed(self) -> bool:
+        if not self._daily_limit_expired():
+            return False
+        self.daily_limit_credits = None
+        self.daily_limit_set_at = None
+        self._save_daily_limit_credits()
+        return True
+
     def _save_window_position(self) -> None:
         try:
-            x, y = self._clamp_position(
-                self.root.winfo_x(),
-                self.root.winfo_y(),
-                self.root.winfo_screenwidth(),
-                self.root.winfo_screenheight(),
-            )
-            self._save_state({"x": x, "y": y})
+            self._save_state({"x": self.root.winfo_x(), "y": self.root.winfo_y()})
         except Exception as exc:  # noqa: BLE001 - position persistence must not break dragging.
             self._write_ui_log(f"save_window_position_error {exc!r}")
+
+    def _remember_window_position_soon(self, event: tk.Event | None = None) -> None:
+        if event is not None and event.widget is not self.root:
+            return
+        try:
+            if self.position_after_id:
+                self.root.after_cancel(self.position_after_id)
+            self.position_after_id = self.root.after(400, self._save_window_position_after_configure)
+        except Exception as exc:  # noqa: BLE001 - position persistence must never affect UI.
+            self._write_ui_log(f"schedule_window_position_save_error {exc!r}")
+
+    def _save_window_position_after_configure(self) -> None:
+        self.position_after_id = None
+        self._save_window_position()
 
     def _clamp_position(self, x: int, y: int, screen_width: int, screen_height: int) -> tuple[int, int]:
         margin = 8
@@ -245,6 +335,9 @@ class UsageOverlay:
 
     def _show_menu(self, event: tk.Event) -> None:
         self._hide_menu()
+        if self._expire_daily_limit_if_needed():
+            self._resize_window_to_scale()
+            self._render()
 
         item_height = 24
         padding = 6
@@ -252,9 +345,15 @@ class UsageOverlay:
         keep_browser_open = self._keep_browser_open()
         keep_browser_label = "Не закрывать ЛК"
         scale_label = "2x размер"
+        daily_limit_label = "Скрыть лимит в день" if self._daily_limit_enabled() else "Задать лимит на день"
         checkbox_labels = {keep_browser_label, scale_label}
         rows: list[tuple[str, Callable[[], None] | None, bool]] = [
             ("Обновить лимиты", lambda: self.refresh(force=True), False),
+            (
+                daily_limit_label,
+                self._hide_daily_limit if self._daily_limit_enabled() else self._show_daily_limit_dialog,
+                False,
+            ),
             ("", None, False),
             ("Сменить аккаунт", self._reset_account if self.account_resetter else None, False),
             ("", None, False),
@@ -475,6 +574,146 @@ class UsageOverlay:
         self._resize_window_to_scale()
         self._render()
 
+    def _daily_limit_dialog_default_credits(self) -> int | None:
+        if self._daily_limit_enabled():
+            return self.daily_limit_credits
+        return self._default_daily_limit_credits()
+
+    def _edit_daily_limit(self) -> None:
+        self._hide_tooltip()
+        if self._expire_daily_limit_if_needed():
+            self._resize_window_to_scale()
+            self._render()
+            return
+        self._show_daily_limit_dialog()
+
+    def _show_daily_limit_dialog(self) -> None:
+        self._hide_tooltip()
+        dialog = tk.Toplevel(self.root)
+        dialog.overrideredirect(True)
+        dialog.attributes("-topmost", True)
+        dialog.attributes("-alpha", 0.98)
+        dialog.configure(bg="#0d1118", bd=0, highlightthickness=0)
+
+        width = self._s(210)
+        height = self._s(92)
+        x = self.root.winfo_x() + self._s(8)
+        y = self.root.winfo_y() + self._s(22)
+        dialog.geometry(f"{width}x{height}+{x}+{y}")
+
+        canvas = tk.Canvas(dialog, width=width, height=height, highlightthickness=0, bd=0, bg="#0d1118")
+        canvas.pack(fill="both", expand=True)
+        scale = self._current_scale()
+        canvas.create_rectangle(0, 0, width, height, fill="#0f151f", outline="")
+        canvas.create_text(
+            self._s(12),
+            self._s(11),
+            text="Лимит на день",
+            fill="#76a8ff",
+            font=(self.UI_FONT, self._font_size(9), "normal"),
+            anchor="nw",
+        )
+        canvas.create_text(
+            self._s(12),
+            self._s(30),
+            text="Например: 82M",
+            fill="#8793a4",
+            font=(self.UI_FONT, self._font_size(8), "normal"),
+            anchor="nw",
+        )
+
+        default_value = self._daily_limit_dialog_default_credits()
+        value = tk.StringVar(value=short_number(default_value) if default_value else "")
+        canvas.create_rectangle(
+            self._s(12),
+            self._s(49),
+            self._s(104),
+            self._s(73),
+            fill="#1a222d",
+            outline="#303946",
+            width=max(1, self._s(1)),
+        )
+        entry = tk.Entry(
+            dialog,
+            textvariable=value,
+            bg="#1a222d",
+            fg="#f4f7fb",
+            insertbackground="#76a8ff",
+            relief="flat",
+            bd=0,
+            highlightthickness=0,
+            font=(self.NUMBER_FONT, self._font_size(11), "bold"),
+            justify="center",
+        )
+        entry.place(x=self._s(15), y=self._s(51), width=self._s(86), height=self._s(20))
+
+        error_var = tk.StringVar(value="")
+        error_label = tk.Label(
+            dialog,
+            textvariable=error_var,
+            bg="#0f151f",
+            fg="#ff4d5d",
+            font=(self.UI_FONT, self._font_size(7), "normal"),
+        )
+        error_label.place(x=self._s(12), y=self._s(74), width=self._s(186), height=self._s(13))
+
+        def close_dialog() -> None:
+            try:
+                dialog.destroy()
+            except tk.TclError:
+                pass
+
+        def save_limit() -> None:
+            parsed = self._parse_credit_input(value.get())
+            if parsed is None:
+                error_var.set("Введите число: 82M или 82000000")
+                return
+            self.daily_limit_credits = parsed
+            self.daily_limit_set_at = datetime.now().astimezone()
+            self._save_daily_limit_credits()
+            close_dialog()
+            self._resize_window_to_scale()
+            self._render()
+
+        ok = tk.Label(
+            dialog,
+            text="OK",
+            bg="#1a222d",
+            fg="#76a8ff",
+            font=(self.UI_FONT, self._font_size(8), "normal"),
+            padx=0,
+            pady=0,
+        )
+        ok.place(x=self._s(116), y=self._s(49), width=self._s(36), height=self._s(24))
+        ok.bind("<Button-1>", lambda _event: save_limit())
+        cancel = tk.Label(
+            dialog,
+            text="Отмена",
+            bg="#1a222d",
+            fg="#9aa8ba",
+            font=(self.UI_FONT, self._font_size(8), "normal"),
+            padx=0,
+            pady=0,
+        )
+        cancel.place(x=self._s(158), y=self._s(49), width=self._s(40), height=self._s(24))
+        cancel.bind("<Button-1>", lambda _event: close_dialog())
+
+        dialog.bind("<Return>", lambda _event: save_limit())
+        dialog.bind("<Escape>", lambda _event: close_dialog())
+        entry.focus_force()
+        entry.selection_range(0, tk.END)
+
+        # Keep pyright quiet when Tk scaling is 1; the variable is useful for future geometry tweaks.
+        _ = scale
+
+    def _hide_daily_limit(self) -> None:
+        self.daily_limit_credits = None
+        self.daily_limit_set_at = None
+        self._save_daily_limit_credits()
+        self._hide_tooltip()
+        self._resize_window_to_scale()
+        self._render()
+
     def _resize_window_to_scale(self) -> None:
         width = self._scaled_width()
         height = self._scaled_height()
@@ -486,7 +725,6 @@ class UsageOverlay:
         )
         self.canvas.configure(width=width, height=height)
         self.root.geometry(f"{width}x{height}+{x}+{y}")
-        self._save_window_position()
 
     def _reset_account(self) -> None:
         if not self.account_resetter:
@@ -540,7 +778,17 @@ class UsageOverlay:
                     str(script),
                     "-TargetVersion",
                     self.update_info.latest_label,
-                ],
+                ]
+                + (
+                    ["-ReleaseZipUrl", self.update_info.release_zip_url]
+                    if self.update_info.release_zip_url
+                    else []
+                )
+                + (
+                    ["-ReleaseSha256", self.update_info.release_sha256]
+                    if self.update_info.release_sha256
+                    else []
+                ),
                 cwd=str(script.parents[1]),
                 creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
             )
@@ -574,6 +822,71 @@ class UsageOverlay:
             return f"{minutes // 60}ч"
         return f"{minutes}м"
 
+    @staticmethod
+    def _parse_credit_input(value: str) -> int | None:
+        cleaned = value.strip().lower().replace(",", ".").replace(" ", "")
+        if not cleaned:
+            return None
+        multiplier = 1
+        suffixes = (
+            ("млрд", 1_000_000_000),
+            ("b", 1_000_000_000),
+            ("млн", 1_000_000),
+            ("m", 1_000_000),
+            ("м", 1_000_000),
+            ("тыс", 1_000),
+            ("k", 1_000),
+            ("к", 1_000),
+        )
+        for suffix, suffix_multiplier in suffixes:
+            if cleaned.endswith(suffix):
+                cleaned = cleaned[: -len(suffix)]
+                multiplier = suffix_multiplier
+                break
+        try:
+            amount = float(cleaned)
+        except ValueError:
+            return None
+        if multiplier == 1 and amount < 1_000_000:
+            multiplier = 1_000_000
+        credits = round(amount * multiplier)
+        return credits if credits > 0 else None
+
+    @staticmethod
+    def _remaining_plan_days(plan_status: str | None) -> float | None:
+        if not plan_status:
+            return None
+        text = plan_status.lower().replace("ё", "е")
+        days = 0.0
+        patterns = (
+            (r"(\d+(?:[.,]\d+)?)\s*(?:д|дн|дня|дней|день)", 1.0),
+            (r"(\d+(?:[.,]\d+)?)\s*(?:ч|час|часа|часов)", 1.0 / 24.0),
+            (r"(\d+(?:[.,]\d+)?)\s*(?:м|мин|минут|минуты)", 1.0 / (24.0 * 60.0)),
+        )
+        for pattern, multiplier in patterns:
+            for match in re.finditer(pattern, text):
+                days += float(match.group(1).replace(",", ".")) * multiplier
+        if days <= 0:
+            return None
+        return days
+
+    def _default_daily_limit_credits(self) -> int | None:
+        if not self.last_snapshot:
+            return None
+        window = find_window(self.last_snapshot, "7d") or self._window_by_index(1)
+        if not window or window.credits_remaining is None:
+            return None
+        days = self._remaining_plan_days(window.reset_text) or self._remaining_plan_days(self.last_snapshot.plan_status) or 1
+        today_spent = 0
+        daily_usage = getattr(self, "daily_usage", None)
+        if daily_usage:
+            try:
+                spent = daily_usage.today_spent_7d(self.last_snapshot)
+                today_spent = spent.amount if spent is not None else 0
+            except Exception as exc:  # noqa: BLE001 - a missing history estimate should not block the dialog.
+                self._write_ui_log(f"default_daily_limit_today_spent_error {exc!r}")
+        return max(1, round((window.credits_remaining + today_spent) / days))
+
     def _schedule_next_refresh(self) -> None:
         if self.after_id:
             self.root.after_cancel(self.after_id)
@@ -581,6 +894,24 @@ class UsageOverlay:
         if self._has_pending_transient_failure() or (self.last_snapshot and not self.last_snapshot.has_data):
             delay_ms = self.LOGIN_POLL_SECONDS * 1000
         self.after_id = self.root.after(delay_ms, self.refresh)
+
+    def _schedule_resume_watchdog(self) -> None:
+        if self.resume_after_id:
+            self.root.after_cancel(self.resume_after_id)
+        self.resume_after_id = self.root.after(self.RESUME_HEARTBEAT_SECONDS * 1000, self._check_resume_watchdog)
+
+    def _check_resume_watchdog(self) -> None:
+        now = datetime.now().astimezone()
+        previous = self.last_resume_check_at
+        self.last_resume_check_at = now
+        try:
+            if previous and now - previous >= timedelta(seconds=self.RESUME_GAP_SECONDS):
+                self._write_ui_log(f"resume_gap_detected seconds={(now - previous).total_seconds():.0f}")
+                self.last_refresh_at = None
+                if not self.refreshing:
+                    self.refresh(force=True)
+        finally:
+            self._schedule_resume_watchdog()
 
     def _has_displayable_data(self) -> bool:
         return bool(self.last_snapshot and self.last_snapshot.has_data)
@@ -704,13 +1035,42 @@ class UsageOverlay:
             return 0
         return math.ceil((bbox[2] - bbox[0]) / self._current_scale())
 
-    def _progress(self, x: int, y: int, width: int, percent: float | None) -> None:
-        self._rounded_rect(x, y, x + width, y + 3, 2, "#242932")
+    def _progress(self, x: int, y: int, width: int, percent: float | None, tags: str | tuple[str, ...] = ()) -> None:
+        self._rounded_rect(x, y, x + width, y + 3, 2, "#242932", tags=tags)
         if percent is None:
             return
         fill_width = min(width, max(0, int(width * max(0.0, min(1.0, percent / 100)))))
         if fill_width > 0:
-            self._rounded_rect(x, y, x + fill_width, y + 3, 2, "#76a8ff")
+            self._rounded_rect(x, y, x + fill_width, y + 3, 2, "#76a8ff", tags=tags)
+
+    @staticmethod
+    def _mix_color(start: str, end: str, amount: float) -> str:
+        amount = max(0.0, min(1.0, amount))
+        start_rgb = tuple(int(start[index : index + 2], 16) for index in (1, 3, 5))
+        end_rgb = tuple(int(end[index : index + 2], 16) for index in (1, 3, 5))
+        mixed = tuple(round(start_rgb[index] + (end_rgb[index] - start_rgb[index]) * amount) for index in range(3))
+        return f"#{mixed[0]:02x}{mixed[1]:02x}{mixed[2]:02x}"
+
+    def _daily_progress_color(self, percent: float) -> str:
+        if percent <= 50:
+            return "#76a8ff"
+        if percent >= 100:
+            return "#ff4d5d"
+        if percent <= 75:
+            return self._mix_color("#ffd166", "#ff9f1c", (percent - 50.0) / 25.0)
+        return self._mix_color("#ff9f1c", "#ff4d5d", (percent - 75.0) / 25.0)
+
+    def _daily_progress(self, x: int, y: int, width: int, percent: float | None, tags: str | tuple[str, ...] = ()) -> None:
+        if percent is not None and percent >= 100:
+            self._rounded_rect(x - 2, y - 1, x + width + 2, y + 4, 3, "#3a1e26", tags=tags)
+        self._rounded_rect(x, y, x + width, y + 3, 2, "#242932", tags=tags)
+        if percent is None:
+            return
+        fill_width = min(width, max(0, int(width * max(0.0, min(1.0, percent / 100)))))
+        if fill_width <= 0:
+            return
+        color = self._daily_progress_color(percent)
+        self._rounded_rect(x, y, x + fill_width, y + 3, 2, color, tags=tags)
 
     def _window_progress_percent(self, window: UsageWindow | None) -> float | None:
         if not window:
@@ -781,17 +1141,89 @@ class UsageOverlay:
         self._text(214, y + 2, reset, "#8793a4", 8, "normal", "ne", family=self.UI_FONT)
         self._progress(30, y + 17, 184, percent)
 
+    def _daily_limit_values(self) -> tuple[int, int, int, float] | None:
+        if not self._daily_limit_enabled() or not self.last_snapshot:
+            return None
+        limit = self.daily_limit_credits
+        if not limit:
+            return None
+        today_spent = self.daily_usage.today_spent_7d(self.last_snapshot)
+        spent = today_spent.amount if today_spent is not None else 0
+        window = find_window(self.last_snapshot, "7d") or self._window_by_index(1)
+        floor = max(0, (window.credits_remaining if window and window.credits_remaining is not None else 0) - limit)
+        percent = min(999.0, (spent / limit) * 100)
+        return spent, limit, floor, percent
+
+    def _daily_limit_hint(self) -> str:
+        values = self._daily_limit_values()
+        if not values:
+            return "нет данных"
+        _spent, _limit, floor, _percent = values
+        return f"не падаем ниже {short_number_clean(floor)}"
+
+    def _draw_daily_limit_row(self, y: int) -> None:
+        values = self._daily_limit_values()
+        if not values:
+            return
+        spent, limit, floor, percent = values
+        value = f"{short_number_clean(spent)} / {short_number_clean(limit)}"
+        percent_text = compact_percent(percent)
+        tooltip = self._daily_limit_hint()
+        row_tag = "daily-limit-row"
+        value_tag = "daily-limit-value"
+        percent_tag = "daily-limit-percent"
+        color = "#ff4d5d" if percent >= 100 else "#ffe082"
+        percent_color = "#8793a4"
+        value_x = self._daily_limit_value_x()
+
+        self.canvas.create_rectangle(
+            self._s(4),
+            self._s(y - 2),
+            self._s(self.WIDTH - 4),
+            self._s(y + 21),
+            fill="#101722",
+            outline="",
+            tags=row_tag,
+        )
+        self._text(9, y, "лимит/день", "#667386", 8, "normal", tags=row_tag, family=self.UI_FONT)
+        self.canvas.create_rectangle(
+            self._s(value_x - 4),
+            self._s(y + 1),
+            self._s(154),
+            self._s(y + 16),
+            fill="#101722",
+            outline="",
+            tags=(row_tag, value_tag),
+        )
+        self._text(value_x, y + 8, value, color, 9, "bold", "w", tags=(row_tag, value_tag), family=self.NUMBER_FONT)
+        self._text(214, y + 2, percent_text, percent_color, 8, "normal", "ne", tags=(row_tag, percent_tag), family=self.UI_FONT)
+        self.canvas.tag_bind(value_tag, "<Enter>", lambda event, text=tooltip: self._show_tooltip(event, text))
+        self.canvas.tag_bind(value_tag, "<Motion>", lambda event: self._move_tooltip(event))
+        self.canvas.tag_bind(value_tag, "<Leave>", lambda _event: self._hide_tooltip())
+        self.canvas.tag_bind(row_tag, "<Double-Button-1>", lambda _event: self._edit_daily_limit())
+        self._daily_progress(30, y + 17, 184, percent, tags=row_tag)
+
+    def _daily_limit_value_x(self) -> int:
+        window = self._window_by_index(1) or self._window_by_index(0)
+        if not window:
+            return 82
+        value_width = self._measure_text(format_credits(window.display_value), 9, "bold", self.NUMBER_FONT)
+        return max(80, round(124 - value_width / 2) - 10)
+
     def _render(self) -> None:
+        if self._expire_daily_limit_if_needed():
+            self._resize_window_to_scale()
         self.canvas.delete("all")
-        self._rounded_rect(0, 0, self.WIDTH, self.HEIGHT, 8, "#0d1118")
-        self._rounded_rect(1, 1, self.WIDTH - 1, self.HEIGHT - 1, 8, "#101722", "#182231")
+        content_height = self._content_height()
+        self._rounded_rect(0, 0, self.WIDTH, content_height, 8, "#0d1118")
+        self._rounded_rect(1, 1, self.WIDTH - 1, content_height - 1, 8, "#101722", "#182231")
 
         snapshot = self.last_snapshot
         if snapshot and not snapshot.has_data:
             message = snapshot.status_note or "нет данных"
             self._text(
                 self.WIDTH // 2,
-                self.HEIGHT // 2,
+                content_height // 2,
                 message,
                 "#ffb86b",
                 9,
@@ -842,6 +1274,7 @@ class UsageOverlay:
 
         self._draw_limit_row(25, "5ч", self._window_by_index(0))
         self._draw_limit_row(47, "7д", self._window_by_index(1))
+        self._draw_daily_limit_row(69)
 
     def _apply_snapshot(self, snapshot: UsageSnapshot) -> None:
         now = datetime.now().astimezone()
@@ -878,11 +1311,33 @@ class UsageOverlay:
 
     def _write_ui_log(self, message: str) -> None:
         try:
-            self.debug_log.parent.mkdir(parents=True, exist_ok=True)
-            with self.debug_log.open("a", encoding="utf-8") as handle:
-                handle.write(f"{datetime.now().isoformat(timespec='seconds')} {message}\n")
+            append_bounded_log(self.debug_log, f"{datetime.now().isoformat(timespec='seconds')} {message}\n")
         except Exception:
             pass
+
+    def _finish_refresh(self, snapshot: UsageSnapshot | None = None, error: object | None = None) -> None:
+        try:
+            if error is not None:
+                self._apply_error(error)
+            elif snapshot is not None:
+                self._apply_snapshot(snapshot)
+        finally:
+            self.refreshing = False
+            self._schedule_next_refresh()
+
+    def _refresh_in_background(self) -> None:
+        try:
+            snapshot = self.reader()
+        except Exception as exc:  # noqa: BLE001 - show operational errors without crashing.
+            try:
+                self.root.after(0, lambda error=exc: self._finish_refresh(error=error))
+            except tk.TclError:
+                self.refreshing = False
+            return
+        try:
+            self.root.after(0, lambda result=snapshot: self._finish_refresh(snapshot=result))
+        except tk.TclError:
+            self.refreshing = False
 
     def refresh(self, force: bool = False) -> None:
         now = datetime.now().astimezone()
@@ -905,14 +1360,14 @@ class UsageOverlay:
         if not has_fresh_data:
             self.status_text = "обновляю"
             self._render()
+        if getattr(self, "async_refresh", False):
+            threading.Thread(target=self._refresh_in_background, daemon=True).start()
+            return
         self.root.update_idletasks()
         try:
-            self._apply_snapshot(self.reader())
+            self._finish_refresh(snapshot=self.reader())
         except Exception as exc:  # noqa: BLE001 - show operational errors without crashing.
-            self._apply_error(exc)
-        finally:
-            self.refreshing = False
-            self._schedule_next_refresh()
+            self._finish_refresh(error=exc)
 
     def run(self) -> None:
         self.root.mainloop()
@@ -920,6 +1375,12 @@ class UsageOverlay:
     def close(self) -> None:
         if self.after_id:
             self.root.after_cancel(self.after_id)
+        if self.resume_after_id:
+            self.root.after_cancel(self.resume_after_id)
+            self.resume_after_id = None
+        if self.position_after_id:
+            self.root.after_cancel(self.position_after_id)
+            self.position_after_id = None
         self._hide_tooltip()
         self._save_window_position()
         self.root.destroy()

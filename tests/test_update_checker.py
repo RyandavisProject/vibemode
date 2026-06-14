@@ -6,6 +6,7 @@ from neurogate_usage_overlay.update_checker import (
     check_for_update,
     is_newer_version,
     normalize_version,
+    _release_asset_info,
 )
 
 
@@ -45,6 +46,33 @@ class UpdateCheckerTest(unittest.TestCase):
         assert info is not None
         self.assertEqual(info.latest_label, "v1.5.1")
         self.assertEqual(info.current_version, "1.5.0")
+
+    def test_check_for_update_prefers_release_zip_asset(self):
+        payload = {
+            "tag_name": "v1.7.0",
+            "html_url": "https://github.com/RyandavisProject/neurogate-overlay/releases/tag/v1.7.0",
+            "assets": [
+                {
+                    "name": "notes.txt",
+                    "browser_download_url": "https://example.test/notes.txt",
+                },
+                {
+                    "name": "neurogate-overlay-v1.7.0.zip",
+                    "browser_download_url": "https://example.test/neurogate-overlay-v1.7.0.zip",
+                    "digest": "sha256:" + "a" * 64,
+                },
+            ],
+        }
+        with patch("neurogate_usage_overlay.update_checker.urlopen", return_value=FakeResponse(payload)):
+            info = check_for_update(current_version="1.6.0", api_url="https://example.test/latest")
+
+        self.assertIsNotNone(info)
+        assert info is not None
+        self.assertEqual(info.release_zip_url, "https://example.test/neurogate-overlay-v1.7.0.zip")
+        self.assertEqual(info.release_sha256, "a" * 64)
+
+    def test_release_asset_info_ignores_source_archives_without_assets(self):
+        self.assertEqual(_release_asset_info({"zipball_url": "https://example.test/source.zip"}), (None, None))
 
     def test_check_for_update_ignores_current_release(self):
         payload = {

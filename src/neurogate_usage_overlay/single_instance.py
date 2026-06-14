@@ -32,7 +32,8 @@ class SingleInstanceLock:
             self._handle = None
 
     def __enter__(self) -> SingleInstanceLock:
-        self.acquire()
+        if not self.acquire():
+            raise RuntimeError(f"Another overlay instance already holds {self.path}")
         return self
 
     def __exit__(self, _exc_type, _exc, _tb) -> None:
@@ -40,6 +41,7 @@ class SingleInstanceLock:
 
 
 def _lock_file(handle) -> bool:
+    handle.seek(0)
     if _IS_WINDOWS:
         import msvcrt
 
@@ -59,10 +61,10 @@ def _lock_file(handle) -> bool:
 
 
 def _unlock_file(handle) -> None:
+    handle.seek(0)
     if _IS_WINDOWS:
         import msvcrt
 
-        handle.seek(0)
         msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
         return
 

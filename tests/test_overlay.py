@@ -1,11 +1,13 @@
 import unittest
 import tempfile
+import threading
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
 from neurogate_usage_overlay.models import UsageSnapshot, UsageWindow
-from neurogate_usage_overlay.overlay import UsageOverlay
+from neurogate_usage_overlay.overlay import UsageOverlay, compact_percent
 from neurogate_usage_overlay.update_checker import UpdateInfo
 
 
@@ -23,6 +25,25 @@ class FakeRoot:
 
     def update_idletasks(self) -> None:
         pass
+
+
+class FakePositionRoot(FakeRoot):
+    def __init__(self, x: int = 100, y: int = 120) -> None:
+        super().__init__()
+        self.x = x
+        self.y = y
+        self.callbacks = {}
+
+    def after(self, delay_ms: int, callback):
+        after_id = super().after(delay_ms, callback)
+        self.callbacks[after_id] = callback
+        return after_id
+
+    def winfo_x(self) -> int:
+        return self.x
+
+    def winfo_y(self) -> int:
+        return self.y
 
 
 class OverlayScheduleTest(unittest.TestCase):
@@ -96,6 +117,31 @@ class OverlayScheduleTest(unittest.TestCase):
             restored.state_file = overlay.state_file
             self.assertEqual(restored._load_ui_scale(), UsageOverlay.SCALE_LARGE)
 
+    def test_daily_limit_is_saved_in_overlay_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            overlay = UsageOverlay.__new__(UsageOverlay)
+            overlay.state_file = Path(directory) / "overlay-state.json"
+            overlay.daily_limit_credits = 82_000_000
+            overlay.daily_limit_set_at = datetime(2026, 6, 14, 10, 0).astimezone()
+
+            overlay._save_daily_limit_credits()
+
+            restored = UsageOverlay.__new__(UsageOverlay)
+            restored.state_file = overlay.state_file
+            restored.daily_limit_set_at = restored._load_daily_limit_set_at()
+            self.assertEqual(restored._load_daily_limit_credits(), 82_000_000)
+            self.assertEqual(restored.daily_limit_set_at.hour, 10)
+
+    def test_legacy_daily_limit_without_suffix_is_migrated_to_millions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state_file = Path(directory) / "overlay-state.json"
+            state_file.write_text('{"daily_limit_credits": 80}', encoding="utf-8")
+
+            overlay = UsageOverlay.__new__(UsageOverlay)
+            overlay.state_file = state_file
+
+            self.assertEqual(overlay._load_daily_limit_credits(), 80_000_000)
+
     def test_window_position_save_preserves_interval(self):
         with tempfile.TemporaryDirectory() as directory:
             state_file = Path(directory) / "overlay-state.json"
@@ -146,6 +192,42 @@ class OverlayScheduleTest(unittest.TestCase):
             restored.state_file = state_file
             self.assertEqual(restored._load_ui_scale(), UsageOverlay.SCALE_LARGE)
 
+    def test_window_position_is_saved_after_configure_event(self):
+        with tempfile.TemporaryDirectory() as directory:
+            overlay = UsageOverlay.__new__(UsageOverlay)
+            overlay.state_file = Path(directory) / "overlay-state.json"
+            overlay.root = FakePositionRoot(144, 188)
+            overlay.position_after_id = None
+            overlay._write_ui_log = lambda _message: None
+
+            event = type("Event", (), {"widget": overlay.root})()
+            overlay._remember_window_position_soon(event)
+            overlay.root.callbacks[overlay.position_after_id]()
+
+            restored = UsageOverlay.__new__(UsageOverlay)
+            restored.state_file = overlay.state_file
+            self.assertEqual(restored._load_window_position(), (144, 188))
+
+    def test_resume_watchdog_forces_refresh_after_long_gap(self):
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        root = FakeRoot()
+        overlay.root = root
+        overlay.resume_after_id = None
+        overlay.last_resume_check_at = datetime.now().astimezone() - timedelta(
+            seconds=UsageOverlay.RESUME_GAP_SECONDS + 5
+        )
+        overlay.last_refresh_at = datetime.now().astimezone()
+        overlay.refreshing = False
+        calls = []
+        overlay.refresh = lambda force=False: calls.append(force)
+        overlay._write_ui_log = lambda _message: None
+
+        overlay._check_resume_watchdog()
+
+        self.assertEqual(calls, [True])
+        self.assertIsNone(overlay.last_refresh_at)
+        self.assertEqual(root.after_calls, [UsageOverlay.RESUME_HEARTBEAT_SECONDS * 1000])
+
 
 class OverlayPositionTest(unittest.TestCase):
     def test_saved_position_is_clamped_inside_screen(self):
@@ -165,8 +247,96 @@ class OverlayPositionTest(unittest.TestCase):
             (800 - UsageOverlay.WIDTH * 2 - 8, 8),
         )
 
+    def test_daily_limit_expands_height_only_when_enabled(self):
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        overlay.daily_limit_credits = None
+        overlay.daily_limit_set_at = None
+
+        self.assertEqual(overlay._content_height(), UsageOverlay.HEIGHT)
+
+        overlay.daily_limit_credits = 82_000_000
+        overlay.daily_limit_set_at = datetime.now().astimezone()
+        self.assertEqual(overlay._content_height(), UsageOverlay.DAILY_LIMIT_HEIGHT)
+
+    def test_expired_daily_limit_uses_normal_height(self):
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        overlay.daily_limit_credits = 82_000_000
+        overlay.daily_limit_set_at = datetime.now().astimezone() - timedelta(hours=25)
+
+        self.assertEqual(overlay._content_height(), UsageOverlay.HEIGHT)
+
 
 class OverlayProgressTest(unittest.TestCase):
+    def test_compact_percent_formats_daily_limit_progress(self):
+        self.assertEqual(compact_percent(13.29), "13%")
+        self.assertEqual(compact_percent(8.71), "8.7%")
+        self.assertEqual(compact_percent(100.4), "100%")
+
+    def test_credit_input_accepts_millions_suffix(self):
+        self.assertEqual(UsageOverlay._parse_credit_input("82M"), 82_000_000)
+        self.assertEqual(UsageOverlay._parse_credit_input("82,5 млн"), 82_500_000)
+        self.assertEqual(UsageOverlay._parse_credit_input("80"), 80_000_000)
+        self.assertEqual(UsageOverlay._parse_credit_input("82000000"), 82_000_000)
+        self.assertIsNone(UsageOverlay._parse_credit_input("нет"))
+
+    def test_plan_days_include_hours_as_decimal_part(self):
+        self.assertAlmostEqual(UsageOverlay._remaining_plan_days("активен еще 2 дня 18 часов"), 2.75)
+        self.assertAlmostEqual(UsageOverlay._remaining_plan_days("ост. 7ч"), 7 / 24)
+
+    def test_default_daily_limit_uses_seven_day_remaining_and_plan_days(self):
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        overlay.last_snapshot = UsageSnapshot(
+            updated_at=datetime.now(),
+            plan_status="активен еще 28 дней 7 часов",
+            windows=[UsageWindow(title="7 дней", credits_remaining=413_100_000, reset_text="5д 8ч")],
+        )
+        today_spent = type("TodaySpend", (), {"amount": 10_900_000, "since_text": "00:00"})()
+        overlay.daily_usage = type("DailyUsage", (), {"today_spent_7d": lambda _self, _snapshot: today_spent})()
+
+        self.assertEqual(overlay._default_daily_limit_credits(), 79_500_000)
+
+    def test_daily_limit_dialog_prefills_saved_limit_when_editing(self):
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        overlay.daily_limit_credits = 80_000_000
+        overlay.daily_limit_set_at = datetime.now().astimezone()
+
+        self.assertEqual(overlay._daily_limit_dialog_default_credits(), 80_000_000)
+
+    def test_daily_limit_hint_reports_weekly_floor_after_daily_limit(self):
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        overlay.last_snapshot = UsageSnapshot(
+            updated_at=datetime.now(),
+            windows=[UsageWindow(title="7 дней", credits_remaining=413_100_000, reset_text="5д 8ч")],
+        )
+        overlay.daily_limit_credits = 80_000_000
+        overlay.daily_limit_set_at = datetime.now().astimezone()
+        today_spent = type("TodaySpend", (), {"amount": 8_700_000, "since_text": "00:00"})()
+        overlay.daily_usage = type("DailyUsage", (), {"today_spent_7d": lambda _self, _snapshot: today_spent})()
+
+        self.assertEqual(overlay._daily_limit_hint(), "не падаем ниже 333.1M")
+
+    def test_daily_limit_values_use_today_spent_and_saved_limit(self):
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        snapshot = UsageSnapshot(updated_at=datetime.now(), windows=[UsageWindow(title="7 дней", credits_remaining=421_300_000)])
+        overlay.last_snapshot = snapshot
+        overlay.daily_limit_credits = 82_000_000
+        today_spent = type("TodaySpend", (), {"amount": 10_900_000, "since_text": "00:00"})()
+        overlay.daily_usage = type("DailyUsage", (), {"today_spent_7d": lambda _self, _snapshot: today_spent})()
+
+        spent, limit, floor, percent = overlay._daily_limit_values()
+        self.assertEqual((spent, limit, floor), (10_900_000, 82_000_000, 339_300_000))
+        self.assertAlmostEqual(percent, 13.29, places=2)
+
+    def test_daily_progress_color_warns_after_half_and_red_after_limit(self):
+        overlay = UsageOverlay.__new__(UsageOverlay)
+
+        self.assertEqual(overlay._daily_progress_color(49), "#76a8ff")
+        self.assertEqual(overlay._daily_progress_color(50), "#76a8ff")
+        self.assertEqual(overlay._daily_progress_color(53), "#ffcb5d")
+        self.assertEqual(overlay._daily_progress_color(75), "#ff9f1c")
+        self.assertEqual(overlay._daily_progress_color(90), "#ff6e43")
+        self.assertEqual(overlay._daily_progress_color(100), "#ff4d5d")
+
     def test_window_progress_prefers_site_percent(self):
         overlay = UsageOverlay.__new__(UsageOverlay)
         window = UsageWindow(
@@ -231,11 +401,34 @@ class OverlayProgressTest(unittest.TestCase):
 
 
 class OverlayRenderTest(unittest.TestCase):
+    def test_daily_limit_row_has_double_click_editor_binding(self):
+        snapshot = UsageSnapshot(
+            updated_at=datetime.now(),
+            windows=[UsageWindow(title="7 дней", credits_remaining=421_300_000)],
+        )
+        overlay = UsageOverlay(lambda: snapshot)
+        try:
+            overlay.last_snapshot = snapshot
+            overlay.daily_limit_credits = 82_000_000
+            overlay.daily_limit_set_at = datetime.now().astimezone()
+            today_spent = type("TodaySpend", (), {"amount": 10_900_000, "since_text": "00:00"})()
+            overlay.daily_usage = type("DailyUsage", (), {"today_spent_7d": lambda _self, _snapshot: today_spent})()
+
+            overlay._render()
+
+            self.assertTrue(overlay.canvas.tag_bind("daily-limit-row", "<Double-Button-1>"))
+            percent_items = overlay.canvas.find_withtag("daily-limit-percent")
+            self.assertEqual(len(percent_items), 1)
+            self.assertEqual(overlay.canvas.itemcget(percent_items[0], "text"), "13%")
+        finally:
+            overlay.close()
+
     def test_login_state_renders_single_centered_message(self):
         overlay = UsageOverlay(lambda: UsageSnapshot(updated_at=datetime.now()))
         try:
             overlay.last_snapshot = UsageSnapshot(updated_at=datetime.now(), status_note="нужен вход")
             overlay.status_text = "нужен вход"
+            overlay.daily_limit_credits = None
 
             overlay._render()
             overlay.root.update_idletasks()
@@ -256,6 +449,52 @@ class OverlayRenderTest(unittest.TestCase):
 
 
 class OverlayTransientStatusTest(unittest.TestCase):
+    def test_async_refresh_returns_before_slow_reader_finishes(self):
+        finished = threading.Event()
+        snapshot = UsageSnapshot(
+            updated_at=datetime(2026, 6, 12, 15, 25),
+            windows=[UsageWindow(title="5 часов", credits_remaining=118_900_000)],
+        )
+
+        class AsyncRoot(FakeRoot):
+            def after(self, delay_ms: int, callback):
+                result = super().after(delay_ms, callback)
+                if delay_ms == 0:
+                    callback()
+                    finished.set()
+                return result
+
+        def slow_reader() -> UsageSnapshot:
+            time.sleep(0.15)
+            return snapshot
+
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        overlay.reader = slow_reader
+        overlay.root = AsyncRoot()
+        overlay.after_id = None
+        overlay.interval_minutes = 1
+        overlay.refreshing = False
+        overlay.async_refresh = True
+        overlay.last_snapshot = None
+        overlay.last_refresh_at = None
+        overlay.status_text = "обновляю"
+        overlay.transient_failure_since = None
+        overlay.transient_failure_count = 0
+        overlay.transient_status_note = None
+        overlay.daily_usage = type("DailyUsage", (), {"record_snapshot": lambda *_args: None})()
+        overlay._render = lambda: None
+        overlay._write_ui_log = lambda _message: None
+
+        started = time.perf_counter()
+        overlay.refresh()
+        elapsed = time.perf_counter() - started
+
+        self.assertLess(elapsed, 0.08)
+        self.assertTrue(overlay.refreshing)
+        self.assertTrue(finished.wait(1))
+        self.assertFalse(overlay.refreshing)
+        self.assertEqual(overlay.last_snapshot, snapshot)
+
     def test_no_data_keeps_last_successful_snapshot_during_grace(self):
         overlay = UsageOverlay.__new__(UsageOverlay)
         good_snapshot = UsageSnapshot(
@@ -380,6 +619,27 @@ class OverlayUpdateTest(unittest.TestCase):
         self.assertTrue(any(str(item).endswith("update-and-restart.ps1") for item in args))
         self.assertIn("-TargetVersion", args)
         self.assertIn("v1.5.1", args)
+
+    def test_start_update_passes_release_zip_and_checksum(self):
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        overlay.update_info = UpdateInfo(
+            current_version="1.6.0",
+            latest_version="1.7.0",
+            release_url="https://github.com/RyandavisProject/neurogate-overlay/releases/tag/v1.7.0",
+            release_zip_url="https://example.test/neurogate-overlay-v1.7.0.zip",
+            release_sha256="b" * 64,
+        )
+        overlay.close = lambda: None
+        overlay._apply_error = lambda error: self.fail(f"unexpected update error: {error}")
+
+        with patch("neurogate_usage_overlay.overlay.subprocess.Popen") as popen:
+            overlay._start_update()
+
+        args = popen.call_args.args[0]
+        self.assertIn("-ReleaseZipUrl", args)
+        self.assertIn("https://example.test/neurogate-overlay-v1.7.0.zip", args)
+        self.assertIn("-ReleaseSha256", args)
+        self.assertIn("b" * 64, args)
 
 
 if __name__ == "__main__":

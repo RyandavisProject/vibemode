@@ -1,12 +1,29 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 from .browser_reader import BrowserSettings, NeurogateUsageReader, USAGE_URL
 from .overlay import UsageOverlay
+from .reader_worker import ThreadedUsageReader
 from .single_instance import SingleInstanceLock
+
+
+def _write_pid_file(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(os.getpid()), encoding="utf-8")
+
+
+def _remove_pid_file(path: Path) -> None:
+    try:
+        if path.read_text(encoding="utf-8").strip() == str(os.getpid()):
+            path.unlink()
+    except FileNotFoundError:
+        return
+    except Exception:
+        return
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -38,10 +55,13 @@ def main() -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     args = build_parser().parse_args()
-    lock = SingleInstanceLock(args.profile_dir.parent / "overlay.lock")
+    state_dir = args.profile_dir.parent
+    lock = SingleInstanceLock(state_dir / "overlay.lock")
     if not lock.acquire():
         print("NeuroGate API overlay is already running.")
         return 0
+    pid_file = state_dir / "overlay.pid"
+    _write_pid_file(pid_file)
 
     settings = BrowserSettings(
         usage_url=args.url,
@@ -49,27 +69,31 @@ def main() -> int:
         headless=args.headless or not args.show_browser,
         browser_channel=args.browser_channel,
     )
-    reader = NeurogateUsageReader(settings)
-
     try:
-        reader.start()
         if args.once:
+            reader = NeurogateUsageReader(settings)
+            reader.start()
             snapshot = reader.read()
             print(snapshot)
+            reader.stop()
             return 0
+        reader = ThreadedUsageReader(settings)
         overlay = UsageOverlay(
             reader.refresh,
             interval_seconds=args.interval,
             keep_browser_open_getter=lambda: reader.keep_browser_open,
             keep_browser_open_setter=reader.set_keep_browser_open,
             account_resetter=reader.reset_account_session,
+            async_refresh=True,
         )
         overlay.run()
         return 0
     finally:
         try:
-            reader.stop()
+            if "reader" in locals():
+                reader.stop()
         finally:
+            _remove_pid_file(pid_file)
             lock.release()
 
 

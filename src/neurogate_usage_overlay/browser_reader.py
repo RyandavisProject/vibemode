@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .models import UsageSnapshot
+from .log_utils import append_bounded_log
 from .parser import has_invalid_session, has_stale_cabinet_data, parse_usage_text
 
 
@@ -16,7 +17,8 @@ USAGE_URL = "https://portal.neurogate.space/client/usage"
 VISIBLE_WINDOW_ARGS = ("--window-position=96,80", "--window-size=1180,860")
 HIDDEN_WINDOW_ARGS = ("--window-position=-32000,-32000", "--window-size=1440,950")
 LOGIN_CONFIRM_ATTEMPTS = 10
-AUTO_LOGIN_DELAY_ATTEMPTS = 16
+LOGIN_PROMPT_CONFIRM_ATTEMPTS = 3
+AUTO_LOGIN_DELAY_ATTEMPTS = 3
 
 
 def _hide_windows_for_pids(process_ids: set[int]) -> int:
@@ -380,7 +382,7 @@ class NeurogateUsageReader:
             if self._is_login_text(last_text):
                 login_text = last_text
                 login_attempts += 1
-                if login_attempts >= LOGIN_CONFIRM_ATTEMPTS:
+                if login_attempts >= LOGIN_PROMPT_CONFIRM_ATTEMPTS:
                     return login_text
                 continue
             login_attempts = 0
@@ -586,9 +588,8 @@ class NeurogateUsageReader:
                 f"account={snapshot.account!r} total={snapshot.total_used} "
                 f"remaining={snapshot.remaining} windows={len(snapshot.windows)} "
                 f"url={snapshot.source_url!r} {windows} "
-                f"note={note!r} text={snapshot.raw_text[:240]!r}\n"
+                f"note={note!r} text_len={len(snapshot.raw_text)}\n"
             )
-            with self.settings.debug_log.open("a", encoding="utf-8") as handle:
-                handle.write(line)
+            append_bounded_log(self.settings.debug_log, line)
         except Exception:
             pass
