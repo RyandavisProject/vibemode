@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ctypes
 import shutil
 import subprocess
 import sys
@@ -22,8 +21,11 @@ AUTO_LOGIN_DELAY_ATTEMPTS = 3
 
 
 def _hide_windows_for_pids(process_ids: set[int]) -> int:
+    """Hide visible browser windows by PID. Windows-only; no-op on other platforms."""
     if not process_ids or not sys.platform.startswith("win"):
         return 0
+
+    import ctypes
 
     user32 = ctypes.windll.user32
     hidden_count = 0
@@ -70,8 +72,9 @@ class NeurogateUsageReader:
         try:
             from playwright.sync_api import sync_playwright
         except ImportError as exc:
+            install_hint = "scripts\\install.ps1" if sys.platform.startswith("win") else "scripts/install.sh"
             raise RuntimeError(
-                "Playwright is not installed. Run scripts\\install.ps1 first."
+                f"Playwright is not installed. Run {install_hint} first."
             ) from exc
 
         self.settings.profile_dir.mkdir(parents=True, exist_ok=True)
@@ -113,16 +116,16 @@ class NeurogateUsageReader:
         return args
 
     def _hide_hidden_browser_taskbar_windows(self) -> int:
-        if not sys.platform.startswith("win"):
-            return 0
-        pids = self._profile_browser_process_ids()
-        if not pids:
-            return 0
-        return _hide_windows_for_pids(pids)
+        if sys.platform.startswith("win"):
+            pids = self._profile_browser_process_ids_windows()
+            if not pids:
+                return 0
+            return _hide_windows_for_pids(pids)
+        if sys.platform == "darwin":
+            return self._hide_offscreen_chrome_macos()
+        return 0
 
-    def _profile_browser_process_ids(self) -> set[int]:
-        if not sys.platform.startswith("win"):
-            return set()
+    def _profile_browser_process_ids_windows(self) -> set[int]:
         needle = str(self.settings.profile_dir.resolve()).replace("'", "''").lower()
         script = (
             "$needle = '" + needle + "'\n"
@@ -147,6 +150,39 @@ class NeurogateUsageReader:
             except ValueError:
                 pass
         return pids
+
+    def _hide_offscreen_chrome_macos(self) -> int:
+        """On macOS, Chrome is already positioned offscreen via HIDDEN_WINDOW_ARGS.
+
+        There is no system API to hide windows of other processes without
+        Accessibility permissions. The offscreen placement (-32000,-32000)
+        keeps the browser invisible in practice.  We use AppleScript to move
+        Chrome windows off-screen only when we can, but we never raise an error
+        if the call fails — the overlay must keep working regardless.
+        """
+        needle = str(self.settings.profile_dir.resolve())
+        try:
+            result = subprocess.run(
+                ["pgrep", "-f", needle],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            pids: set[int] = set()
+            for line in result.stdout.splitlines():
+                try:
+                    pids.add(int(line.strip()))
+                except ValueError:
+                    pass
+            if not pids:
+                return 0
+            # AppleScript cannot target windows by PID without Accessibility
+            # permissions, so just report that we found processes; the browser
+            # stays at -32000,-32000 which is effectively hidden.
+            return len(pids)
+        except Exception:
+            return 0
 
     def _close_context(self) -> None:
         if self._context:

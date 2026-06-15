@@ -4,6 +4,7 @@ import math
 import json
 import re
 import subprocess
+import sys
 import threading
 import tkinter as tk
 from datetime import datetime, timedelta
@@ -97,9 +98,18 @@ class UsageOverlay:
     RESUME_HEARTBEAT_SECONDS = 30
     RESUME_GAP_SECONDS = 120
     INTERVAL_CHOICES_MINUTES = (1, 3, 5, 10, 15, 60)
-    UI_FONT = "Segoe UI Variable Small"
-    TEXT_FONT = "Segoe UI Variable Text"
-    NUMBER_FONT = "Calibri Light"
+    if sys.platform == "darwin":
+        UI_FONT = "SF Pro Text"
+        TEXT_FONT = "SF Pro Text"
+        NUMBER_FONT = "Helvetica Neue"
+    elif sys.platform.startswith("win"):
+        UI_FONT = "Segoe UI Variable Small"
+        TEXT_FONT = "Segoe UI Variable Text"
+        NUMBER_FONT = "Calibri Light"
+    else:
+        UI_FONT = "DejaVu Sans"
+        TEXT_FONT = "DejaVu Sans"
+        NUMBER_FONT = "DejaVu Sans"
 
     def __init__(
         self,
@@ -766,34 +776,38 @@ class UsageOverlay:
     def _start_update(self) -> None:
         if not self.update_info:
             return
-        script = Path(__file__).resolve().parents[2] / "scripts" / "update-and-restart.ps1"
+
+        scripts_dir = Path(__file__).resolve().parents[2] / "scripts"
+        if sys.platform.startswith("win"):
+            script = scripts_dir / "update-and-restart.ps1"
+            cmd = [
+                "powershell.exe",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(script),
+                "-TargetVersion",
+                self.update_info.latest_label,
+            ]
+            if self.update_info.release_zip_url:
+                cmd += ["-ReleaseZipUrl", self.update_info.release_zip_url]
+            if self.update_info.release_sha256:
+                cmd += ["-ReleaseSha256", self.update_info.release_sha256]
+            extra_kwargs: dict = {"creationflags": getattr(subprocess, "CREATE_NEW_CONSOLE", 0)}
+        else:
+            script = scripts_dir / "update-and-restart.sh"
+            cmd = ["bash", str(script), "--target-version", self.update_info.latest_label]
+            if self.update_info.release_zip_url:
+                cmd += ["--release-zip-url", self.update_info.release_zip_url]
+            if self.update_info.release_sha256:
+                cmd += ["--release-sha256", self.update_info.release_sha256]
+            extra_kwargs = {}
+
         if not script.exists():
             self._apply_error("скрипт обновления не найден")
             return
         try:
-            subprocess.Popen(
-                [
-                    "powershell.exe",
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-File",
-                    str(script),
-                    "-TargetVersion",
-                    self.update_info.latest_label,
-                ]
-                + (
-                    ["-ReleaseZipUrl", self.update_info.release_zip_url]
-                    if self.update_info.release_zip_url
-                    else []
-                )
-                + (
-                    ["-ReleaseSha256", self.update_info.release_sha256]
-                    if self.update_info.release_sha256
-                    else []
-                ),
-                cwd=str(script.parents[1]),
-                creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
-            )
+            subprocess.Popen(cmd, cwd=str(scripts_dir.parent), **extra_kwargs)
         except Exception as exc:  # noqa: BLE001 - show update launch errors in the overlay.
             self._apply_error(exc)
             return

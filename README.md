@@ -1,8 +1,8 @@
 # NeuroGate API 1.7.1
 
-Небольшой Windows-оверлей для лимитов NeuroGate API.
+Небольшой оверлей для лимитов NeuroGate API. Работает на **Windows** и **macOS**.
 
-English note: this is a compact Windows overlay for NeuroGate API usage limits.
+English note: this is a compact always-on-top overlay for NeuroGate API usage limits, supporting Windows and macOS.
 The main documentation is in Russian because the primary users are Russian-speaking.
 
 Оверлей читает страницу `https://portal.neurogate.space/client/usage` через
@@ -107,14 +107,27 @@ The main documentation is in Russian because the primary users are Russian-speak
 
 ## Требования
 
+### Windows
+
 - Windows 10/11
 - Python 3.10+
 - Google Chrome
 - доступ к сайту NeuroGate
 
+### macOS
+
+- macOS 13 Ventura или новее
+- Python 3.10+ (рекомендуется через [Homebrew](https://brew.sh): `brew install python`)
+- Google Chrome
+- доступ к сайту NeuroGate
+
+> На macOS tkinter поставляется вместе с Python от Homebrew. Если используется
+> системный Python от Apple, tkinter может отсутствовать — установи Python через
+> Homebrew или с [python.org](https://python.org).
+
 ## Установка
 
-### Вариант 1: обычная установка из ZIP
+### Windows — Вариант 1: обычная установка из ZIP
 
 Этот способ подходит пользователю без Codex, Claude Code и Git.
 
@@ -132,7 +145,7 @@ Install-NeuroGate-API.bat
 Установщик создаст локальное Python-окружение, поставит зависимости и добавит
 ярлык `NeuroGate API` на рабочий стол.
 
-### Вариант 2: установка через Codex, Claude Code или Git
+### Windows — Вариант 2: установка через Codex, Claude Code или Git
 
 ```powershell
 git clone https://github.com/RyandavisProject/neurogate-overlay.git
@@ -153,7 +166,29 @@ scripts\install.bat
 - установку пакета в режиме разработки;
 - ярлык на рабочем столе с названием `NeuroGate API`.
 
+### macOS — установка
+
+```bash
+git clone https://github.com/RyandavisProject/neurogate-overlay.git
+cd neurogate-overlay
+bash scripts/install.sh
+```
+
+Или, если проект уже скачан:
+
+```bash
+bash scripts/install.sh
+```
+
+Установщик создаёт:
+
+- локальное Python-окружение в `.venv/`;
+- установку пакета в режиме разработки;
+- `.app`-ярлык `NeuroGate API.app` в `~/Applications` (виден в Spotlight и Launchpad).
+
 ## Запуск
+
+### Windows
 
 Через PowerShell:
 
@@ -166,6 +201,14 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-overlay.ps1
 ```text
 NeuroGate API
 ```
+
+### macOS
+
+```bash
+bash scripts/run-overlay.sh
+```
+
+Или открой `NeuroGate API.app` из `~/Applications` через Finder, Spotlight или Launchpad.
 
 Первый запуск:
 
@@ -252,6 +295,8 @@ GitHub Release содержит ZIP-asset проекта и checksum, updater п
 
 ## Полезные команды
 
+### Windows
+
 Установить:
 
 ```text
@@ -298,6 +343,44 @@ powershell -ExecutionPolicy Bypass -File .\scripts\check.ps1
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1
+```
+
+### macOS
+
+Установить:
+
+```bash
+bash scripts/install.sh
+```
+
+Создать ярлык в ~/Applications повторно:
+
+```bash
+bash scripts/create-desktop-shortcut.sh
+```
+
+Запустить оверлей:
+
+```bash
+bash scripts/run-overlay.sh
+```
+
+Запустить с видимым браузером для диагностики:
+
+```bash
+.venv/bin/python -m neurogate_usage_overlay --show-browser
+```
+
+Один раз прочитать данные в консоль:
+
+```bash
+bash scripts/run-once.sh
+```
+
+Запустить проверки проекта:
+
+```bash
+bash scripts/check.sh
 ```
 
 ## Команда для Codex или Claude Code

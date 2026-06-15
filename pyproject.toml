@@ -5,18 +5,18 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "neurogate-overlay"
 version = "1.7.1"
-description = "Small Windows always-on-top overlay for NeuroGate API usage limits."
+description = "Always-on-top overlay for NeuroGate API usage limits (Windows & macOS)."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "NeuroGate API contributors" }]
-keywords = ["neurogate", "api", "overlay", "usage", "windows", "playwright"]
+keywords = ["neurogate", "api", "overlay", "usage", "windows", "macos", "playwright"]
 classifiers = [
   "Development Status :: 3 - Alpha",
-  "Environment :: Win32 (MS Windows)",
   "Intended Audience :: End Users/Desktop",
   "License :: OSI Approved :: MIT License",
   "Operating System :: Microsoft :: Windows",
+  "Operating System :: MacOS",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
