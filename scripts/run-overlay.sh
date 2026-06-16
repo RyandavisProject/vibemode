@@ -29,10 +29,18 @@ if [[ -f "$PID_FILE" ]]; then
 fi
 
 # Kill any leftover overlay or Chrome processes using this profile.
+# Exclude the current process and its parent (update-and-restart.sh) to avoid self-kill.
+_self_pids="$$"
+[[ -n "${PPID:-}" ]] && _self_pids="$$|$PPID"
+
 pgrep -f 'neurogate_usage_overlay|neurogate-overlay|neurogate-api|vibemode-overlay|neurogate-usage-overlay' \
+    | grep -Ev "^($_self_pids)$" \
     | while read -r pid; do kill "$pid" 2>/dev/null || true; done || true
 
 pgrep -f "$PROFILE_PATH" \
+    | grep -Ev "^($_self_pids)$" \
     | while read -r pid; do kill "$pid" 2>/dev/null || true; done || true
+
+unset _self_pids
 
 exec "$VENV_PYTHON" -m neurogate_usage_overlay --interval 60
