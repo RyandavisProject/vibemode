@@ -1461,11 +1461,24 @@ class UsageOverlay:
 
 
 if sys.platform == "darwin":
-    try:
-        import rumps  # type: ignore[import-untyped]
-        _RUMPS_AVAILABLE = True
-    except ImportError:
-        _RUMPS_AVAILABLE = False
+    import queue as _queue_module
+    import objc as _objc
+    from Foundation import NSObject as _NSObject, NSTimer as _NSTimer, NSRunLoop as _NSRunLoop, NSDefaultRunLoopMode as _NSDefaultRunLoopMode
+
+    class _TimerTarget(_NSObject):  # type: ignore[misc]
+        """One-shot or repeating NSTimer callback target. Created once per timer call."""
+        _cb = None
+
+        @_objc.python_method
+        def setup_(self, cb):
+            self._cb = cb
+
+        def fire_(self, _timer):
+            try:
+                if self._cb:
+                    self._cb()
+            except Exception:
+                pass
 
     class MenuBarOverlay:
         """macOS menu bar status item showing NeuroGate API usage.
@@ -1491,11 +1504,6 @@ if sys.platform == "darwin":
             account_resetter: AccountResetter | None = None,
             async_refresh: bool = False,
         ) -> None:
-            if not _RUMPS_AVAILABLE:
-                raise RuntimeError(
-                    "rumps is required for the macOS menu bar UI. "
-                    "Install it with: pip install 'neurogate-overlay[macos]'"
-                )
             self.reader = reader
             self.keep_browser_open_getter = keep_browser_open_getter
             self.keep_browser_open_setter = keep_browser_open_setter
@@ -1517,17 +1525,19 @@ if sys.platform == "darwin":
             self.transient_status_note: str | None = None
             self.update_info: UpdateInfo | None = None
             self.update_check_running = False
-            self._timer: rumps.Timer | None = None
-            self._resume_timer: rumps.Timer | None = None
-            self._poll_timer: rumps.Timer | None = None
             # Background thread posts (snapshot, error) tuples here;
-            # the main-thread poll timer drains it and updates the UI.
-            import queue as _queue_module
+            # the main-thread NSTimer drains it on the main thread.
             self._pending: _queue_module.Queue = _queue_module.Queue()
+            self._ns_timer: object | None = None
+            self._resume_ns_timer: object | None = None
 
-            self._app = rumps.App("NG", title="NG …", quit_button=None)
-            self._app.menu.clear()
-            self._build_menu()
+            from .popover_server import PopoverServer
+            from .macos_popover import MenuBarPopover
+            self._server = PopoverServer()
+            self._popover_ui: MenuBarPopover | None = None
+            self._PopoverServer = PopoverServer
+            self._MenuBarPopover = MenuBarPopover
+            self._register_server_actions()
 
         # ------------------------------------------------------------------ state helpers
 
@@ -1669,99 +1679,36 @@ if sys.platform == "darwin":
                 return f"NG {short_number(snap.remaining)}"
             return "NG ?"
 
-        # ------------------------------------------------------------------ menu building
+        # ------------------------------------------------------------------ server actions
 
-        def _build_menu(self) -> None:
-            """Rebuild the full dropdown menu from current state."""
+        def _register_server_actions(self) -> None:
+            self._server.on_action("refresh", lambda: self.refresh(force=True))
+            self._server.on_action("hide_daily", self._on_hide_daily_limit)
+            self._server.on_action("set_daily", self._on_show_daily_limit_dialog)
+            self._server.on_action("toggle_keep", self._on_toggle_keep_browser)
+            self._server.on_action("open_interval", self._on_cycle_interval)
+            self._server.on_action("reset_account", self._on_reset_account)
+            self._server.on_action("update", self._on_start_update)
+            self._server.on_action("quit", self.close)
+            self._server.on_resize(lambda h: self._pending.put(("resize", h)))
+
+        def _push_server_data(self) -> None:
             self._expire_daily_limit_if_needed()
             snap = self.last_snapshot
-            menu_items: list = []
-
-            # ── data rows ──────────────────────────────────────────────────
-            if snap and snap.has_data:
-                account = snap.account or "NeuroGate"
-                plan = compact_plan_status(snap.plan_status)
-                header = f"{account}  {plan}".strip() if plan else account
-                menu_items.append(rumps.MenuItem(header, callback=None))
-                menu_items.append(rumps.separator)
-
-                for window in snap.windows:
-                    label = self._window_label(window)
-                    value = format_credits(window.display_value)
-                    reset = compact_reset_text(window.reset_text)
-                    text = f"{label}   {value}"
-                    if reset and reset != "-":
-                        text += f"   {reset}"
-                    menu_items.append(rumps.MenuItem(text, callback=None))
-
-                if self._daily_limit_enabled() and self.daily_limit_credits:
-                    today_spent = self.daily_usage.today_spent_7d(snap)
-                    spent = today_spent.amount if today_spent else 0
-                    limit = self.daily_limit_credits
-                    pct = compact_percent(min(999.0, (spent / limit) * 100) if limit else None)
-                    text = f"день   {short_number_clean(spent)} / {short_number_clean(limit)}   {pct}"
-                    menu_items.append(rumps.MenuItem(text, callback=None))
-
-                menu_items.append(rumps.separator)
-            elif snap and snap.status_note:
-                menu_items.append(rumps.MenuItem(snap.status_note, callback=None))
-                menu_items.append(rumps.separator)
-
-            # ── actions ────────────────────────────────────────────────────
-            menu_items.append(rumps.MenuItem("Обновить лимиты", callback=lambda _: self.refresh(force=True)))
-
-            daily_label = "Скрыть лимит в день" if self._daily_limit_enabled() else "Задать лимит на день"
-            daily_cb = self._on_hide_daily_limit if self._daily_limit_enabled() else self._on_show_daily_limit_dialog
-            menu_items.append(rumps.MenuItem(daily_label, callback=daily_cb))
-
-            menu_items.append(rumps.separator)
-
-            # keep browser open toggle
-            if self._has_keep_browser_toggle():
-                keep_title = ("✓ " if self._keep_browser_open() else "  ") + "Не закрывать ЛК"
-                menu_items.append(rumps.MenuItem(keep_title, callback=self._on_toggle_keep_browser))
-
-            # interval submenu
-            interval_menu = rumps.MenuItem("Интервал")
-            for minutes in self.INTERVAL_CHOICES_MINUTES:
-                label = UsageOverlay._format_interval_menu(minutes)
-                if minutes == self.interval_minutes:
-                    label = "✓ " + label
-                interval_menu[label] = rumps.MenuItem(
-                    label,
-                    callback=lambda _, m=minutes: self._on_set_interval(m),
-                )
-            menu_items.append(interval_menu)
-
-            menu_items.append(rumps.separator)
-
-            # update info
-            if self.update_info:
-                menu_items.append(rumps.MenuItem(f"Доступна {self.update_info.latest_label}", callback=None))
-                menu_items.append(
-                    rumps.MenuItem(f"Обновить до {self.update_info.latest_label}", callback=lambda _: self._on_start_update())
-                )
-                menu_items.append(rumps.separator)
-
-            if self.account_resetter:
-                menu_items.append(rumps.MenuItem("Сменить аккаунт", callback=lambda _: self._on_reset_account()))
-
-            menu_items.append(rumps.MenuItem("Закрыть", callback=lambda _: self.close()))
-
-            self._app.menu.clear()
-            self._app.menu = menu_items
-            self._app.title = self._menu_bar_title()
-
-        @staticmethod
-        def _window_label(window: UsageWindow) -> str:
-            title = window.title.lower()
-            if "5" in title and "час" in title:
-                return "5ч"
-            if "24" in title and "час" in title:
-                return "24ч"
-            if "7" in title and "д" in title:
-                return "7д"
-            return window.title
+            interval_label = UsageOverlay._format_interval_menu(self.interval_minutes)
+            extra = {
+                "daily_limit_enabled": self._daily_limit_enabled(),
+                "keep_browser_open": self._keep_browser_open(),
+                "has_keep_toggle": self._has_keep_browser_toggle(),
+                "interval_label": interval_label,
+                "has_account_reset": bool(self.account_resetter),
+                "update_available": bool(self.update_info),
+                "update_label": self.update_info.latest_label if self.update_info else "",
+            }
+            self._server.update(snap, extra)
+            if self._popover_ui:
+                title = self._menu_bar_title()
+                self._popover_ui.set_title(title)
 
         # ------------------------------------------------------------------ callbacks
 
@@ -1772,41 +1719,51 @@ if sys.platform == "darwin":
                 self.keep_browser_open_setter(not self._keep_browser_open())
             except Exception as exc:
                 self._write_ui_log(f"toggle_keep_browser_error {exc!r}")
-            self._build_menu()
+            self._push_server_data()
 
         def _on_set_interval(self, minutes: int) -> None:
             self.interval_minutes = UsageOverlay._normalize_interval_minutes(minutes)
             self._save_interval_minutes()
             self._reschedule_timer()
-            self._build_menu()
+            self._push_server_data()
 
         def _on_hide_daily_limit(self, _sender: object) -> None:
             self.daily_limit_credits = None
             self.daily_limit_set_at = None
             self._save_daily_limit()
-            self._build_menu()
+            self._push_server_data()
 
-        def _on_show_daily_limit_dialog(self, _sender: object) -> None:
+        def _on_show_daily_limit_dialog(self, _sender: object = None) -> None:
+            from AppKit import NSAlert, NSTextField
             default = self._default_daily_limit_credits()
             default_str = short_number(default) if default else ""
-            response = rumps.Window(
-                message="Лимит токенов на день (например: 82M)",
-                title="Лимит на день",
-                default_text=default_str,
-                ok="OK",
-                cancel="Отмена",
-                dimensions=(200, 24),
-            ).run()
-            if not response.clicked:
+
+            alert = NSAlert.alloc().init()
+            alert.setMessageText_("Лимит на день")
+            alert.setInformativeText_("Введите лимит токенов (например: 56M)")
+            alert.addButtonWithTitle_("OK")
+            alert.addButtonWithTitle_("Отмена")
+
+            from Foundation import NSMakeRect
+            field = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 0, 200, 24))
+            field.setStringValue_(default_str)
+            alert.setAccessoryView_(field)
+            alert.window().setInitialFirstResponder_(field)
+
+            result = alert.runModal()
+            if result != 1000:  # NSAlertFirstButtonReturn
                 return
-            parsed = UsageOverlay._parse_credit_input(response.text)
+            parsed = UsageOverlay._parse_credit_input(field.stringValue())
             if parsed is None:
-                rumps.alert("Введите число: 82M или 82000000")
+                from AppKit import NSAlert as _A
+                err = _A.alloc().init()
+                err.setMessageText_("Введите число: 56M или 56000000")
+                err.runModal()
                 return
             self.daily_limit_credits = parsed
             self.daily_limit_set_at = datetime.now().astimezone()
             self._save_daily_limit()
-            self._build_menu()
+            self._push_server_data()
 
         def _default_daily_limit_credits(self) -> int | None:
             if not self.last_snapshot:
@@ -1827,8 +1784,20 @@ if sys.platform == "darwin":
                 return
             self._clear_transient_failure()
             self.last_snapshot = UsageSnapshot(updated_at=datetime.now().astimezone(), status_note="нужен вход")
-            self._build_menu()
+            self._push_server_data()
             self._reschedule_timer()
+
+        def _on_cycle_interval(self) -> None:
+            choices = self.INTERVAL_CHOICES_MINUTES
+            try:
+                idx = choices.index(self.interval_minutes)
+                next_idx = (idx + 1) % len(choices)
+            except ValueError:
+                next_idx = 0
+            self.interval_minutes = choices[next_idx]
+            self._save_interval_minutes()
+            self._reschedule_timer()
+            self._push_server_data()
 
         def _on_start_update(self) -> None:
             if not self.update_info:
@@ -1841,7 +1810,7 @@ if sys.platform == "darwin":
             if self.update_info.release_sha256:
                 cmd += ["--release-sha256", self.update_info.release_sha256]
             if not script.exists():
-                rumps.alert("Скрипт обновления не найден")
+                self._write_ui_log("update_script_not_found")
                 return
             try:
                 subprocess.Popen(cmd, cwd=str(scripts_dir.parent))
@@ -1849,32 +1818,9 @@ if sys.platform == "darwin":
                 self._write_ui_log(f"start_update_error {exc!r}")
                 return
             self.close()
+            self.close()
 
         # ------------------------------------------------------------------ refresh logic
-
-        def _reschedule_timer(self) -> None:
-            if self._timer:
-                self._timer.stop()
-            delay = self.interval_minutes * 60
-            if self._has_pending_transient_failure() or (self.last_snapshot and not self.last_snapshot.has_data):
-                delay = 2
-            self._timer = rumps.Timer(self._on_timer_tick, delay)
-            self._timer.start()
-
-        def _on_timer_tick(self, _timer: object) -> None:
-            if self._timer:
-                self._timer.stop()
-            self.refresh()
-
-        def _on_resume_watchdog(self, _timer: object) -> None:
-            now = datetime.now().astimezone()
-            previous = self.last_resume_check_at
-            self.last_resume_check_at = now
-            if previous and now - previous >= timedelta(seconds=self.RESUME_GAP_SECONDS):
-                self._write_ui_log(f"resume_gap_detected seconds={(now - previous).total_seconds():.0f}")
-                self.last_refresh_at = None
-                if not self.refreshing:
-                    self.refresh(force=True)
 
         def refresh(self, force: bool = False) -> None:
             now = datetime.now().astimezone()
@@ -1937,14 +1883,15 @@ if sys.platform == "darwin":
                 self._write_ui_log(
                     f"  window[{i}] title={w.title!r} remaining={w.credits_remaining} display={w.display_value}"
                 )
-            self._build_menu()
+            self._push_server_data()
 
         def _apply_error(self, error: object) -> None:
             if self._hold_transient_failure("ошибка", datetime.now().astimezone()):
                 self._write_ui_log(f"transient_error_held {error!r}")
                 return
             self._write_ui_log(f"error {error!r}")
-            self._app.title = "NG !"
+            if self._popover_ui:
+                self._popover_ui.set_title("NG !")
 
         def check_for_updates(self) -> None:
             if self.update_check_running:
@@ -1953,46 +1900,123 @@ if sys.platform == "darwin":
 
             def run_check() -> None:
                 info = check_for_update()
-
-                def apply_result(_timer: object) -> None:
-                    self.update_check_running = False
-                    self.update_info = info
-                    self._build_menu()
-                    rumps.Timer(lambda _: self.check_for_updates(), self.UPDATE_CHECK_SECONDS).start()
-
-                rumps.Timer(apply_result, 0).start()
+                self._pending.put(("update_check", info))
 
             threading.Thread(target=run_check, daemon=True).start()
 
         # ------------------------------------------------------------------ run / close
 
-        def _drain_pending(self, _sender: object) -> None:
-            """Called on main thread by poll timer. Drains background results and updates UI."""
+        # ------------------------------------------------------------------ NSTimer helpers
+
+        @staticmethod
+        def _make_ns_timer(interval: float, callback: "Callable[[], None]") -> object:
+            """Schedule a repeating NSTimer on the main run loop."""
+            target = _TimerTarget.alloc().init()
+            target.setup_(callback)
+            timer = _NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+                interval, target, _objc.selector(target.fire_, selector=b"fire:", signature=b"v@:@"), None, True
+            )
+            _NSRunLoop.mainRunLoop().addTimer_forMode_(timer, _NSDefaultRunLoopMode)
+            return timer
+
+        @staticmethod
+        def _cancel_ns_timer(timer: object) -> None:
+            if timer is not None:
+                try:
+                    timer.invalidate()  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+
+        # ------------------------------------------------------------------ pending queue drain
+
+        def _drain_pending(self) -> None:
+            """Drains background refresh results on main thread."""
             try:
                 while True:
-                    kind, value = self._pending.get_nowait()
+                    item = self._pending.get_nowait()
+                    kind, value = item[0], item[1]
                     if kind == "snapshot":
                         self._finish_refresh(snapshot=value)
-                    else:
+                    elif kind == "error":
                         self._finish_refresh(error=value)
+                    elif kind == "resize":
+                        if self._popover_ui:
+                            self._popover_ui.resize_to_content(value)
+                    elif kind == "update_check":
+                        self.update_check_running = False
+                        self.update_info = value
+                        self._push_server_data()
+                        self._make_ns_timer(self.UPDATE_CHECK_SECONDS, self.check_for_updates)
             except Exception:
                 pass
 
+        # ------------------------------------------------------------------ refresh timer
+
+        def _reschedule_timer(self) -> None:
+            self._cancel_ns_timer(self._ns_timer)
+            delay = self.interval_minutes * 60
+            if self._has_pending_transient_failure() or (self.last_snapshot and not self.last_snapshot.has_data):
+                delay = 2
+
+            def _tick() -> None:
+                self._cancel_ns_timer(self._ns_timer)
+                self._ns_timer = None
+                self.refresh()
+
+            self._ns_timer = self._make_ns_timer(delay, _tick)
+
+        # ------------------------------------------------------------------ run / close
+
         def run(self) -> None:
-            # Poll timer runs on main thread and drains background refresh results.
-            self._poll_timer = rumps.Timer(self._drain_pending, 0.5)
-            self._poll_timer.start()
-            rumps.Timer(lambda _: self.refresh(), 0.5).start()
-            rumps.Timer(lambda _: self.check_for_updates(), 1.2).start()
-            self._resume_timer = rumps.Timer(self._on_resume_watchdog, self.RESUME_HEARTBEAT_SECONDS)
-            self._resume_timer.start()
-            self._app.run()
+            from AppKit import NSApplication, NSApp
+            from Foundation import NSTimer, NSRunLoop, NSDefaultRunLoopMode
+
+            app = NSApplication.sharedApplication()
+            app.setActivationPolicy_(1)  # NSApplicationActivationPolicyAccessory — no Dock icon
+
+            # Install the popover status item on main thread
+            self._popover_ui = self._MenuBarPopover(
+                server_url=self._server.get_url(),
+                initial_title="NG …",
+            )
+            self._popover_ui.install()
+
+            # Poll timer: drains background refresh results every 0.5s on main thread
+            self._ns_poll_timer = self._make_ns_timer(0.5, self._drain_pending)
+
+            # Resume watchdog
+            self._resume_ns_timer = self._make_ns_timer(
+                self.RESUME_HEARTBEAT_SECONDS, self._on_resume_watchdog_ns
+            )
+
+            # Kick off first refresh and update check after a short delay
+            self._make_ns_timer(0.5, self._initial_refresh)
+            self._make_ns_timer(1.2, self._initial_update_check)
+
+            app.run()
+
+        def _initial_refresh(self) -> None:
+            self.refresh()
+
+        def _initial_update_check(self) -> None:
+            self.check_for_updates()
+
+        def _on_resume_watchdog_ns(self) -> None:
+            now = datetime.now().astimezone()
+            previous = self.last_resume_check_at
+            self.last_resume_check_at = now
+            if previous and now - previous >= timedelta(seconds=self.RESUME_GAP_SECONDS):
+                self._write_ui_log(f"resume_gap_detected seconds={(now - previous).total_seconds():.0f}")
+                self.last_refresh_at = None
+                if not self.refreshing:
+                    self.refresh(force=True)
 
         def close(self) -> None:
-            if self._timer:
-                self._timer.stop()
-            if self._poll_timer:
-                self._poll_timer.stop()
-            if self._resume_timer:
-                self._resume_timer.stop()
-            rumps.quit_application()
+            self._cancel_ns_timer(self._ns_timer)
+            self._cancel_ns_timer(getattr(self, "_ns_poll_timer", None))
+            self._cancel_ns_timer(self._resume_ns_timer)
+            if self._popover_ui:
+                self._popover_ui.remove()
+            self._server.stop()
+            from AppKit import NSApp
+            NSApp.terminate_(None)
