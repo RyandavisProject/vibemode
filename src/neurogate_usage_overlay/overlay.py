@@ -1691,17 +1691,30 @@ if sys.platform == "darwin":
             self._server.on_action("update", self._on_start_update)
             self._server.on_action("quit", self.close)
             self._server.on_resize(lambda h: self._pending.put(("resize", h)))
+            self._server.set_main_thread_dispatch(
+                lambda name, cb: self._pending.put(("action_main", (name, cb)))
+            )
 
         def _push_server_data(self) -> None:
             self._expire_daily_limit_if_needed()
             snap = self.last_snapshot
             interval_label = UsageOverlay._format_interval_menu(self.interval_minutes)
+
+            # daily limit stats
+            daily_spent: int | None = None
+            daily_limit_recommended: int | None = None
+            if snap and snap.has_data:
+                today = self.daily_usage.today_spent_7d(snap)
+                daily_spent = today.amount if today else 0
+                if not self._daily_limit_enabled():
+                    daily_limit_recommended = self._default_daily_limit_credits()
+
             extra = {
                 "daily_limit_enabled": self._daily_limit_enabled(),
-                "keep_browser_open": self._keep_browser_open(),
-                "has_keep_toggle": self._has_keep_browser_toggle(),
+                "daily_limit_credits": self.daily_limit_credits,
+                "daily_limit_recommended": daily_limit_recommended,
+                "daily_spent": daily_spent,
                 "interval_label": interval_label,
-                "has_account_reset": bool(self.account_resetter),
                 "update_available": bool(self.update_info),
                 "update_label": self.update_info.latest_label if self.update_info else "",
             }
@@ -1942,6 +1955,12 @@ if sys.platform == "darwin":
                     elif kind == "resize":
                         if self._popover_ui:
                             self._popover_ui.resize_to_content(value)
+                    elif kind == "action_main":
+                        _name, cb = value
+                        try:
+                            cb()
+                        except Exception as exc:
+                            self._write_ui_log(f"action_main_error name={_name!r} {exc!r}")
                     elif kind == "update_check":
                         self.update_check_running = False
                         self.update_info = value

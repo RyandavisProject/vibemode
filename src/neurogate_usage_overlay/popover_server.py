@@ -97,7 +97,26 @@ _TEMPLATE = """\
     color: #8e8e93;
   }
 
-  /* ── status (no data) ── */
+  /* ── daily limit card ── */
+  .daily-card {
+    background: rgba(255,255,255,0.55);
+    border-radius: 10px;
+    padding: 9px 11px 8px;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    margin-bottom: 10px;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .daily-card:hover { background: rgba(255,255,255,0.75); }
+  .daily-card .card-sub { margin-top: 4px; }
+  .daily-hint {
+    font-size: 11px;
+    color: #8e8e93;
+    padding: 4px 4px 2px;
+    cursor: pointer;
+  }
+  .daily-hint:hover { color: #007aff; }
   .status-row {
     text-align: center;
     color: #8e8e93;
@@ -188,6 +207,26 @@ function render() {
       </div>`;
     }
     html += `</div>`;
+
+    // daily limit card
+    if (data.daily_limit_enabled && data.daily_limit_credits != null) {
+      const spent = data.daily_spent || 0;
+      const limit = data.daily_limit_credits;
+      const pct   = Math.min(100, (spent / limit) * 100);
+      const cls   = barClass(pct);
+      html += `<div class="daily-card" onclick="window.__ng_action('hide_daily')" title="Нажмите чтобы сбросить лимит">
+        <div class="card-row">
+          <span class="card-title">лимит/день</span>
+          <span class="card-pct">${Math.round(pct)}%</span>
+        </div>
+        <div class="bar-track"><div class="bar-fill ${cls}" style="width:${pct.toFixed(1)}%"></div></div>
+        <div class="card-sub">${shortNum(spent)} / ${shortNum(limit)} &nbsp;·&nbsp; потрачено сегодня</div>
+      </div>`;
+    } else if (data.daily_limit_recommended != null) {
+      html += `<div class="daily-hint" onclick="window.__ng_action('set_daily')">
+        ⊕ Задать лимит на день &nbsp;·&nbsp; рекомендуем ${shortNum(data.daily_limit_recommended)}
+      </div>`;
+    }
   } else {
     html += `<div class="status-row">${snap && snap.status_note ? snap.status_note : "Загрузка…"}</div>`;
   }
@@ -317,7 +356,19 @@ class PopoverServer:
     def handle_action(self, name: str) -> None:
         cb = self._action_callbacks.get(name)
         if cb:
+            # Actions that show AppKit dialogs must run on main thread —
+            # post them to pending queue via the resize callback channel
+            if getattr(self, "_main_thread_actions", None) and name in self._main_thread_actions:
+                main_cb = self._main_thread_dispatch
+                if main_cb:
+                    threading.Thread(target=lambda: main_cb(name, cb), daemon=True).start()
+                    return
             threading.Thread(target=cb, daemon=True).start()
+
+    def set_main_thread_dispatch(self, dispatch_fn: "Any") -> None:
+        """Register a dispatch function that routes callbacks to main thread."""
+        self._main_thread_dispatch = dispatch_fn
+        self._main_thread_actions = {"set_daily", "reset_account", "update"}
 
     def handle_resize(self, height: int) -> None:
         cb = getattr(self, "_resize_callback", None)
