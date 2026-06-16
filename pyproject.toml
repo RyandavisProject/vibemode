@@ -26,6 +26,9 @@ dependencies = [
   "playwright>=1.44",
 ]
 
+[project.optional-dependencies]
+macos = ["rumps>=0.4.0"]
+
 [project.urls]
 Homepage = "https://github.com/RyandavisProject/neurogate-overlay"
 Issues = "https://github.com/RyandavisProject/neurogate-overlay/issues"

@@ -1458,3 +1458,541 @@ class UsageOverlay:
         self._hide_tooltip()
         self._save_window_position()
         self.root.destroy()
+
+
+if sys.platform == "darwin":
+    try:
+        import rumps  # type: ignore[import-untyped]
+        _RUMPS_AVAILABLE = True
+    except ImportError:
+        _RUMPS_AVAILABLE = False
+
+    class MenuBarOverlay:
+        """macOS menu bar status item showing NeuroGate API usage.
+
+        Displays a compact title (e.g. "NG 82.3M") in the menu bar; clicking it
+        reveals a dropdown with per-window limits, settings, and actions.
+        """
+
+        INTERVAL_CHOICES_MINUTES = UsageOverlay.INTERVAL_CHOICES_MINUTES
+        MIN_REFRESH_SECONDS = UsageOverlay.MIN_REFRESH_SECONDS
+        UPDATE_CHECK_SECONDS = UsageOverlay.UPDATE_CHECK_SECONDS
+        RESUME_HEARTBEAT_SECONDS = UsageOverlay.RESUME_HEARTBEAT_SECONDS
+        RESUME_GAP_SECONDS = UsageOverlay.RESUME_GAP_SECONDS
+        TRANSIENT_FAILURE_CONFIRMATIONS = UsageOverlay.TRANSIENT_FAILURE_CONFIRMATIONS
+        TRANSIENT_FAILURE_GRACE_SECONDS = UsageOverlay.TRANSIENT_FAILURE_GRACE_SECONDS
+
+        def __init__(
+            self,
+            reader: SnapshotReader,
+            interval_seconds: int = 60,
+            keep_browser_open_getter: KeepBrowserGetter | None = None,
+            keep_browser_open_setter: KeepBrowserSetter | None = None,
+            account_resetter: AccountResetter | None = None,
+            async_refresh: bool = False,
+        ) -> None:
+            if not _RUMPS_AVAILABLE:
+                raise RuntimeError(
+                    "rumps is required for the macOS menu bar UI. "
+                    "Install it with: pip install 'neurogate-overlay[macos]'"
+                )
+            self.reader = reader
+            self.keep_browser_open_getter = keep_browser_open_getter
+            self.keep_browser_open_setter = keep_browser_open_setter
+            self.account_resetter = account_resetter
+            self.async_refresh = async_refresh
+            self.debug_log = Path.home() / ".neurogate-usage-overlay" / "overlay-ui.log"
+            self.state_file = Path.home() / ".neurogate-usage-overlay" / "overlay-state.json"
+            self.daily_usage = DailyUsageStore(Path.home() / ".neurogate-usage-overlay" / "usage-daily.json")
+            default_interval = UsageOverlay._normalize_interval_minutes(math.ceil(interval_seconds / 60))
+            self.interval_minutes = self._load_interval_minutes(default_interval)
+            self.daily_limit_credits: int | None = self._load_daily_limit_credits()
+            self.daily_limit_set_at: datetime | None = self._load_daily_limit_set_at()
+            self.last_snapshot: UsageSnapshot | None = None
+            self.last_refresh_at: datetime | None = None
+            self.last_resume_check_at: datetime | None = None
+            self.refreshing = False
+            self.transient_failure_since: datetime | None = None
+            self.transient_failure_count = 0
+            self.transient_status_note: str | None = None
+            self.update_info: UpdateInfo | None = None
+            self.update_check_running = False
+            self._timer: rumps.Timer | None = None
+            self._resume_timer: rumps.Timer | None = None
+            self._poll_timer: rumps.Timer | None = None
+            # Background thread posts (snapshot, error) tuples here;
+            # the main-thread poll timer drains it and updates the UI.
+            import queue as _queue_module
+            self._pending: _queue_module.Queue = _queue_module.Queue()
+
+            self._app = rumps.App("NG", title="NG …", quit_button=None)
+            self._app.menu.clear()
+            self._build_menu()
+
+        # ------------------------------------------------------------------ state helpers
+
+        def _load_state(self) -> dict[str, object]:
+            try:
+                payload = json.loads(self.state_file.read_text(encoding="utf-8"))
+                return payload if isinstance(payload, dict) else {}
+            except Exception:
+                return {}
+
+        def _save_state(self, updates: dict[str, object]) -> None:
+            try:
+                payload = self._load_state()
+                payload.update(updates)
+                self.state_file.parent.mkdir(parents=True, exist_ok=True)
+                self.state_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            except Exception as exc:
+                self._write_ui_log(f"save_state_error {exc!r}")
+
+        def _load_interval_minutes(self, default: int) -> int:
+            try:
+                payload = self._load_state()
+                return UsageOverlay._normalize_interval_minutes(int(payload.get("interval_minutes", default)))
+            except Exception:
+                return UsageOverlay._normalize_interval_minutes(default)
+
+        def _save_interval_minutes(self) -> None:
+            self._save_state({"interval_minutes": self.interval_minutes})
+
+        def _load_daily_limit_credits(self) -> int | None:
+            try:
+                payload = self._load_state()
+                value = int(payload.get("daily_limit_credits") or 0)
+                if 0 < value < 1_000_000:
+                    value *= 1_000_000
+                return value if value > 0 else None
+            except Exception:
+                return None
+
+        def _load_daily_limit_set_at(self) -> datetime | None:
+            try:
+                payload = self._load_state()
+                value = payload.get("daily_limit_set_at")
+                if not isinstance(value, str):
+                    return None
+                parsed = datetime.fromisoformat(value)
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=datetime.now().astimezone().tzinfo)
+                return parsed
+            except Exception:
+                return None
+
+        def _save_daily_limit(self) -> None:
+            self._save_state(
+                {
+                    "daily_limit_credits": self.daily_limit_credits or None,
+                    "daily_limit_set_at": self.daily_limit_set_at.isoformat(timespec="seconds")
+                    if self.daily_limit_credits and self.daily_limit_set_at
+                    else None,
+                }
+            )
+
+        def _daily_limit_expired(self) -> bool:
+            set_at = self.daily_limit_set_at
+            if not self.daily_limit_credits:
+                return False
+            if not set_at:
+                return True
+            now = datetime.now().astimezone()
+            set_at_local = set_at.astimezone(now.tzinfo) if set_at.tzinfo else set_at.replace(tzinfo=now.tzinfo)
+            return set_at_local.date() != now.date()
+
+        def _daily_limit_enabled(self) -> bool:
+            return bool(self.daily_limit_credits) and not self._daily_limit_expired()
+
+        def _expire_daily_limit_if_needed(self) -> bool:
+            if not self._daily_limit_expired():
+                return False
+            self.daily_limit_credits = None
+            self.daily_limit_set_at = None
+            self._save_daily_limit()
+            return True
+
+        def _keep_browser_open(self) -> bool:
+            if not self.keep_browser_open_getter:
+                return False
+            try:
+                return self.keep_browser_open_getter()
+            except Exception as exc:
+                self._write_ui_log(f"keep_browser_open_getter_error {exc!r}")
+                return False
+
+        def _has_keep_browser_toggle(self) -> bool:
+            return bool(self.keep_browser_open_getter and self.keep_browser_open_setter)
+
+        def _has_displayable_data(self) -> bool:
+            return bool(self.last_snapshot and self.last_snapshot.has_data)
+
+        def _has_pending_transient_failure(self) -> bool:
+            return self._has_displayable_data() and self.transient_failure_count > 0
+
+        def _clear_transient_failure(self) -> None:
+            self.transient_failure_since = None
+            self.transient_failure_count = 0
+            self.transient_status_note = None
+
+        def _hold_transient_failure(self, status_note: str | None, now: datetime) -> bool:
+            if not self._has_displayable_data():
+                return False
+            if self.transient_failure_since is None:
+                self.transient_failure_since = now
+                self.transient_failure_count = 0
+            self.transient_failure_count += 1
+            self.transient_status_note = status_note or "нет данных"
+            elapsed = now - self.transient_failure_since
+            should_confirm = (
+                self.transient_failure_count >= self.TRANSIENT_FAILURE_CONFIRMATIONS
+                and elapsed >= timedelta(seconds=self.TRANSIENT_FAILURE_GRACE_SECONDS)
+            )
+            return not should_confirm
+
+        def _write_ui_log(self, message: str) -> None:
+            try:
+                append_bounded_log(self.debug_log, f"{datetime.now().isoformat(timespec='seconds')} {message}\n")
+            except Exception:
+                pass
+
+        # ------------------------------------------------------------------ title helpers
+
+        def _menu_bar_title(self) -> str:
+            snap = self.last_snapshot
+            if not snap or not snap.has_data:
+                return "NG …"
+            # Show remaining credits from the shortest window (5h), fall back to 7d.
+            window = snap.windows[0] if snap.windows else None
+            if window and window.credits_remaining is not None:
+                return f"NG {short_number(window.credits_remaining)}"
+            if snap.remaining is not None:
+                return f"NG {short_number(snap.remaining)}"
+            return "NG ?"
+
+        # ------------------------------------------------------------------ menu building
+
+        def _build_menu(self) -> None:
+            """Rebuild the full dropdown menu from current state."""
+            self._expire_daily_limit_if_needed()
+            snap = self.last_snapshot
+            menu_items: list = []
+
+            # ── data rows ──────────────────────────────────────────────────
+            if snap and snap.has_data:
+                account = snap.account or "NeuroGate"
+                plan = compact_plan_status(snap.plan_status)
+                header = f"{account}  {plan}".strip() if plan else account
+                menu_items.append(rumps.MenuItem(header, callback=None))
+                menu_items.append(rumps.separator)
+
+                for window in snap.windows:
+                    label = self._window_label(window)
+                    value = format_credits(window.display_value)
+                    reset = compact_reset_text(window.reset_text)
+                    text = f"{label}   {value}"
+                    if reset and reset != "-":
+                        text += f"   {reset}"
+                    menu_items.append(rumps.MenuItem(text, callback=None))
+
+                if self._daily_limit_enabled() and self.daily_limit_credits:
+                    today_spent = self.daily_usage.today_spent_7d(snap)
+                    spent = today_spent.amount if today_spent else 0
+                    limit = self.daily_limit_credits
+                    pct = compact_percent(min(999.0, (spent / limit) * 100) if limit else None)
+                    text = f"день   {short_number_clean(spent)} / {short_number_clean(limit)}   {pct}"
+                    menu_items.append(rumps.MenuItem(text, callback=None))
+
+                menu_items.append(rumps.separator)
+            elif snap and snap.status_note:
+                menu_items.append(rumps.MenuItem(snap.status_note, callback=None))
+                menu_items.append(rumps.separator)
+
+            # ── actions ────────────────────────────────────────────────────
+            menu_items.append(rumps.MenuItem("Обновить лимиты", callback=lambda _: self.refresh(force=True)))
+
+            daily_label = "Скрыть лимит в день" if self._daily_limit_enabled() else "Задать лимит на день"
+            daily_cb = self._on_hide_daily_limit if self._daily_limit_enabled() else self._on_show_daily_limit_dialog
+            menu_items.append(rumps.MenuItem(daily_label, callback=daily_cb))
+
+            menu_items.append(rumps.separator)
+
+            # keep browser open toggle
+            if self._has_keep_browser_toggle():
+                keep_title = ("✓ " if self._keep_browser_open() else "  ") + "Не закрывать ЛК"
+                menu_items.append(rumps.MenuItem(keep_title, callback=self._on_toggle_keep_browser))
+
+            # interval submenu
+            interval_menu = rumps.MenuItem("Интервал")
+            for minutes in self.INTERVAL_CHOICES_MINUTES:
+                label = UsageOverlay._format_interval_menu(minutes)
+                if minutes == self.interval_minutes:
+                    label = "✓ " + label
+                interval_menu[label] = rumps.MenuItem(
+                    label,
+                    callback=lambda _, m=minutes: self._on_set_interval(m),
+                )
+            menu_items.append(interval_menu)
+
+            menu_items.append(rumps.separator)
+
+            # update info
+            if self.update_info:
+                menu_items.append(rumps.MenuItem(f"Доступна {self.update_info.latest_label}", callback=None))
+                menu_items.append(
+                    rumps.MenuItem(f"Обновить до {self.update_info.latest_label}", callback=lambda _: self._on_start_update())
+                )
+                menu_items.append(rumps.separator)
+
+            if self.account_resetter:
+                menu_items.append(rumps.MenuItem("Сменить аккаунт", callback=lambda _: self._on_reset_account()))
+
+            menu_items.append(rumps.MenuItem("Закрыть", callback=lambda _: self.close()))
+
+            self._app.menu.clear()
+            self._app.menu = menu_items
+            self._app.title = self._menu_bar_title()
+
+        @staticmethod
+        def _window_label(window: UsageWindow) -> str:
+            title = window.title.lower()
+            if "5" in title and "час" in title:
+                return "5ч"
+            if "24" in title and "час" in title:
+                return "24ч"
+            if "7" in title and "д" in title:
+                return "7д"
+            return window.title
+
+        # ------------------------------------------------------------------ callbacks
+
+        def _on_toggle_keep_browser(self, _sender: object) -> None:
+            if not self.keep_browser_open_setter:
+                return
+            try:
+                self.keep_browser_open_setter(not self._keep_browser_open())
+            except Exception as exc:
+                self._write_ui_log(f"toggle_keep_browser_error {exc!r}")
+            self._build_menu()
+
+        def _on_set_interval(self, minutes: int) -> None:
+            self.interval_minutes = UsageOverlay._normalize_interval_minutes(minutes)
+            self._save_interval_minutes()
+            self._reschedule_timer()
+            self._build_menu()
+
+        def _on_hide_daily_limit(self, _sender: object) -> None:
+            self.daily_limit_credits = None
+            self.daily_limit_set_at = None
+            self._save_daily_limit()
+            self._build_menu()
+
+        def _on_show_daily_limit_dialog(self, _sender: object) -> None:
+            default = self._default_daily_limit_credits()
+            default_str = short_number(default) if default else ""
+            response = rumps.Window(
+                message="Лимит токенов на день (например: 82M)",
+                title="Лимит на день",
+                default_text=default_str,
+                ok="OK",
+                cancel="Отмена",
+                dimensions=(200, 24),
+            ).run()
+            if not response.clicked:
+                return
+            parsed = UsageOverlay._parse_credit_input(response.text)
+            if parsed is None:
+                rumps.alert("Введите число: 82M или 82000000")
+                return
+            self.daily_limit_credits = parsed
+            self.daily_limit_set_at = datetime.now().astimezone()
+            self._save_daily_limit()
+            self._build_menu()
+
+        def _default_daily_limit_credits(self) -> int | None:
+            if not self.last_snapshot:
+                return None
+            window = find_window(self.last_snapshot, "7d")
+            if window and window.credits_remaining is not None:
+                days = UsageOverlay._remaining_plan_days(window.reset_text) or 1
+                return max(1, round(window.credits_remaining / days))
+            return None
+
+        def _on_reset_account(self) -> None:
+            if not self.account_resetter:
+                return
+            try:
+                self.account_resetter()
+            except Exception as exc:
+                self._write_ui_log(f"reset_account_error {exc!r}")
+                return
+            self._clear_transient_failure()
+            self.last_snapshot = UsageSnapshot(updated_at=datetime.now().astimezone(), status_note="нужен вход")
+            self._build_menu()
+            self._reschedule_timer()
+
+        def _on_start_update(self) -> None:
+            if not self.update_info:
+                return
+            scripts_dir = Path(__file__).resolve().parents[2] / "scripts"
+            script = scripts_dir / "update-and-restart.sh"
+            cmd = ["bash", str(script), "--target-version", self.update_info.latest_label]
+            if self.update_info.release_zip_url:
+                cmd += ["--release-zip-url", self.update_info.release_zip_url]
+            if self.update_info.release_sha256:
+                cmd += ["--release-sha256", self.update_info.release_sha256]
+            if not script.exists():
+                rumps.alert("Скрипт обновления не найден")
+                return
+            try:
+                subprocess.Popen(cmd, cwd=str(scripts_dir.parent))
+            except Exception as exc:
+                self._write_ui_log(f"start_update_error {exc!r}")
+                return
+            self.close()
+
+        # ------------------------------------------------------------------ refresh logic
+
+        def _reschedule_timer(self) -> None:
+            if self._timer:
+                self._timer.stop()
+            delay = self.interval_minutes * 60
+            if self._has_pending_transient_failure() or (self.last_snapshot and not self.last_snapshot.has_data):
+                delay = 2
+            self._timer = rumps.Timer(self._on_timer_tick, delay)
+            self._timer.start()
+
+        def _on_timer_tick(self, _timer: object) -> None:
+            if self._timer:
+                self._timer.stop()
+            self.refresh()
+
+        def _on_resume_watchdog(self, _timer: object) -> None:
+            now = datetime.now().astimezone()
+            previous = self.last_resume_check_at
+            self.last_resume_check_at = now
+            if previous and now - previous >= timedelta(seconds=self.RESUME_GAP_SECONDS):
+                self._write_ui_log(f"resume_gap_detected seconds={(now - previous).total_seconds():.0f}")
+                self.last_refresh_at = None
+                if not self.refreshing:
+                    self.refresh(force=True)
+
+        def refresh(self, force: bool = False) -> None:
+            now = datetime.now().astimezone()
+            if self.refreshing:
+                return
+            if (
+                not force
+                and self._has_displayable_data()
+                and not self._has_pending_transient_failure()
+                and self.last_refresh_at
+                and now - self.last_refresh_at < timedelta(seconds=self.MIN_REFRESH_SECONDS)
+            ):
+                self._reschedule_timer()
+                return
+            self.refreshing = True
+            if self.async_refresh:
+                threading.Thread(target=self._refresh_in_background, daemon=True).start()
+            else:
+                try:
+                    self._finish_refresh(snapshot=self.reader())
+                except Exception as exc:
+                    self._finish_refresh(error=exc)
+
+        def _refresh_in_background(self) -> None:
+            self._write_ui_log("refresh_background_start")
+            try:
+                snapshot = self.reader()
+            except Exception as exc:
+                self._write_ui_log(f"refresh_background_error {exc!r}")
+                self._pending.put(("error", exc))
+                return
+            self._write_ui_log(f"refresh_background_done has_data={snapshot.has_data}")
+            self._pending.put(("snapshot", snapshot))
+
+        def _finish_refresh(self, snapshot: UsageSnapshot | None = None, error: object | None = None) -> None:
+            try:
+                if error is not None:
+                    self._apply_error(error)
+                elif snapshot is not None:
+                    self._apply_snapshot(snapshot)
+            finally:
+                self.refreshing = False
+                self._reschedule_timer()
+
+        def _apply_snapshot(self, snapshot: UsageSnapshot) -> None:
+            now = datetime.now().astimezone()
+            if not snapshot.has_data and self._hold_transient_failure(snapshot.status_note, now):
+                return
+            self.last_snapshot = snapshot
+            self.last_refresh_at = now
+            if snapshot.has_data:
+                self._clear_transient_failure()
+                self.daily_usage.record_snapshot(snapshot, self.last_refresh_at)
+            self._write_ui_log(
+                f"snapshot account={snapshot.account!r} total={snapshot.total_used} "
+                f"remaining={snapshot.remaining} windows={len(snapshot.windows)} "
+                f"cached={snapshot.is_cached} status={snapshot.status_note!r}"
+            )
+            for i, w in enumerate(snapshot.windows):
+                self._write_ui_log(
+                    f"  window[{i}] title={w.title!r} remaining={w.credits_remaining} display={w.display_value}"
+                )
+            self._build_menu()
+
+        def _apply_error(self, error: object) -> None:
+            if self._hold_transient_failure("ошибка", datetime.now().astimezone()):
+                self._write_ui_log(f"transient_error_held {error!r}")
+                return
+            self._write_ui_log(f"error {error!r}")
+            self._app.title = "NG !"
+
+        def check_for_updates(self) -> None:
+            if self.update_check_running:
+                return
+            self.update_check_running = True
+
+            def run_check() -> None:
+                info = check_for_update()
+
+                def apply_result(_timer: object) -> None:
+                    self.update_check_running = False
+                    self.update_info = info
+                    self._build_menu()
+                    rumps.Timer(lambda _: self.check_for_updates(), self.UPDATE_CHECK_SECONDS).start()
+
+                rumps.Timer(apply_result, 0).start()
+
+            threading.Thread(target=run_check, daemon=True).start()
+
+        # ------------------------------------------------------------------ run / close
+
+        def _drain_pending(self, _sender: object) -> None:
+            """Called on main thread by poll timer. Drains background results and updates UI."""
+            try:
+                while True:
+                    kind, value = self._pending.get_nowait()
+                    if kind == "snapshot":
+                        self._finish_refresh(snapshot=value)
+                    else:
+                        self._finish_refresh(error=value)
+            except Exception:
+                pass
+
+        def run(self) -> None:
+            # Poll timer runs on main thread and drains background refresh results.
+            self._poll_timer = rumps.Timer(self._drain_pending, 0.5)
+            self._poll_timer.start()
+            rumps.Timer(lambda _: self.refresh(), 0.5).start()
+            rumps.Timer(lambda _: self.check_for_updates(), 1.2).start()
+            self._resume_timer = rumps.Timer(self._on_resume_watchdog, self.RESUME_HEARTBEAT_SECONDS)
+            self._resume_timer.start()
+            self._app.run()
+
+        def close(self) -> None:
+            if self._timer:
+                self._timer.stop()
+            if self._poll_timer:
+                self._poll_timer.stop()
+            if self._resume_timer:
+                self._resume_timer.stop()
+            rumps.quit_application()

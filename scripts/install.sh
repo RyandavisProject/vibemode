@@ -21,7 +21,11 @@ if [[ ! -d "$VENV" ]]; then
 fi
 
 "$VENV/bin/python" -m pip install --upgrade pip
-"$VENV/bin/python" -m pip install -e "$ROOT"
+if [[ "$(uname)" == "Darwin" ]]; then
+    "$VENV/bin/python" -m pip install -e "$ROOT[macos]"
+else
+    "$VENV/bin/python" -m pip install -e "$ROOT"
+fi
 
 if [[ "$NO_SHORTCUT" -eq 0 ]]; then
     if [[ -n "$SHORTCUT_DIR" ]]; then
