@@ -131,7 +131,7 @@ class BrowserReaderModeTest(unittest.TestCase):
 
     def test_hidden_taskbar_hider_uses_profile_browser_pids(self):
         reader = NeurogateUsageReader(BrowserSettings())
-        reader._profile_browser_process_ids = lambda: {123, 456}  # type: ignore[method-assign]
+        reader._profile_browser_process_ids_windows = lambda: {123, 456}  # type: ignore[method-assign]
 
         with patch("neurogate_usage_overlay.browser_reader._hide_windows_for_pids", return_value=2) as hide:
             hidden_count = reader._hide_hidden_browser_taskbar_windows()

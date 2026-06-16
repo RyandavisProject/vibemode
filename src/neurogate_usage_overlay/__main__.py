@@ -10,6 +10,9 @@ from .overlay import UsageOverlay
 from .reader_worker import ThreadedUsageReader
 from .single_instance import SingleInstanceLock
 
+if sys.platform == "darwin":
+    from .overlay import MenuBarOverlay  # type: ignore[attr-defined]
+
 
 def _write_pid_file(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -78,14 +81,24 @@ def main() -> int:
             reader.stop()
             return 0
         reader = ThreadedUsageReader(settings)
-        overlay = UsageOverlay(
-            reader.refresh,
-            interval_seconds=args.interval,
-            keep_browser_open_getter=lambda: reader.keep_browser_open,
-            keep_browser_open_setter=reader.set_keep_browser_open,
-            account_resetter=reader.reset_account_session,
-            async_refresh=True,
-        )
+        if sys.platform == "darwin":
+            overlay = MenuBarOverlay(
+                reader.refresh,
+                interval_seconds=args.interval,
+                keep_browser_open_getter=lambda: reader.keep_browser_open,
+                keep_browser_open_setter=reader.set_keep_browser_open,
+                account_resetter=reader.reset_account_session,
+                async_refresh=True,
+            )
+        else:
+            overlay = UsageOverlay(
+                reader.refresh,
+                interval_seconds=args.interval,
+                keep_browser_open_getter=lambda: reader.keep_browser_open,
+                keep_browser_open_setter=reader.set_keep_browser_open,
+                account_resetter=reader.reset_account_session,
+                async_refresh=True,
+            )
         overlay.run()
         return 0
     finally:
