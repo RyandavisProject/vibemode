@@ -2,6 +2,7 @@ param(
     [string]$TargetVersion = "",
     [switch]$NoRestart,
     [switch]$NoShortcut,
+    [switch]$AllowUnverifiedZip,
     [string]$ShortcutDir = "",
     [string]$ReleaseZipUrl = "",
     [string]$ReleaseSha256 = ""
@@ -65,8 +66,11 @@ function Get-ReleaseSha256($ArchiveUrl, $ZipPath) {
 function Confirm-ReleaseSha256($ZipPath, $ExpectedHash) {
     $Expected = Normalize-Sha256 $ExpectedHash
     if (-not $Expected) {
-        Write-Host "SHA256 checksum was not provided; continuing without archive integrity verification." -ForegroundColor Yellow
-        return
+        if ($AllowUnverifiedZip -or $env:NEUROGATE_ALLOW_UNVERIFIED_UPDATE -eq "1") {
+            Write-Host "SHA256 checksum was not provided; continuing because unverified ZIP updates were explicitly allowed." -ForegroundColor Yellow
+            return
+        }
+        throw "SHA256 checksum is required for ZIP updates. Attach a .sha256 sidecar, pass -ReleaseSha256, or use -AllowUnverifiedZip only for local development."
     }
     if ($Expected -notmatch '^[0-9a-f]{64}$') {
         throw "Invalid SHA256 checksum format."

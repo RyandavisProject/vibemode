@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import queue
 import threading
-from concurrent.futures import Future
+from concurrent.futures import Future, TimeoutError
 from dataclasses import replace
 from typing import Any
 
 from .browser_reader import BrowserSettings, NeurogateUsageReader
 from .models import UsageSnapshot
+
+
+WORKER_QUEUE_MAXSIZE = 4
+WORKER_CALL_TIMEOUT_SECONDS = 90
+WORKER_STOP_TIMEOUT_SECONDS = 15
 
 
 class ThreadedUsageReader:
@@ -21,7 +26,9 @@ class ThreadedUsageReader:
     def __init__(self, settings: BrowserSettings) -> None:
         self._settings = replace(settings)
         self._keep_browser_open = not settings.headless
-        self._commands: queue.Queue[tuple[str, tuple[Any, ...], Future[Any] | None]] = queue.Queue()
+        self._commands: queue.Queue[tuple[str, tuple[Any, ...], Future[Any] | None]] = queue.Queue(
+            maxsize=WORKER_QUEUE_MAXSIZE
+        )
         self._preload_refresh: Future[Any] | None = None
         self._thread = threading.Thread(target=self._run, name="neurogate-reader", daemon=True)
         self._thread.start()
@@ -47,20 +54,31 @@ class ThreadedUsageReader:
 
     def stop(self) -> None:
         future: Future[Any] = Future()
-        self._commands.put(("stop", (), future))
+        self._put_command("stop", (), future)
         try:
-            future.result(timeout=15)
+            future.result(timeout=WORKER_STOP_TIMEOUT_SECONDS)
         finally:
             if self._thread.is_alive():
                 self._thread.join(timeout=5)
 
     def _call(self, name: str, *args: Any) -> Any:
-        return self._enqueue(name, *args).result()
+        future = self._enqueue(name, *args)
+        try:
+            return future.result(timeout=WORKER_CALL_TIMEOUT_SECONDS)
+        except TimeoutError as exc:
+            future.cancel()
+            raise RuntimeError(f"Reader worker command timed out: {name}") from exc
 
     def _enqueue(self, name: str, *args: Any) -> Future[Any]:
         future: Future[Any] = Future()
-        self._commands.put((name, args, future))
+        self._put_command(name, args, future)
         return future
+
+    def _put_command(self, name: str, args: tuple[Any, ...], future: Future[Any]) -> None:
+        try:
+            self._commands.put((name, args, future), timeout=1)
+        except queue.Full as exc:
+            raise RuntimeError(f"Reader worker queue is full: {name}") from exc
 
     def _run(self) -> None:
         reader = NeurogateUsageReader(self._settings)
@@ -81,8 +99,8 @@ class ThreadedUsageReader:
                 else:
                     raise RuntimeError(f"Unknown reader command: {name}")
             except Exception as exc:  # noqa: BLE001 - propagate operational errors to the caller.
-                if future:
+                if future and not future.cancelled():
                     future.set_exception(exc)
             else:
-                if future:
+                if future and not future.cancelled():
                     future.set_result(result)

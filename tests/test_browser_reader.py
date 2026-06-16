@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from neurogate_usage_overlay.browser_reader import (
     AUTO_LOGIN_DELAY_ATTEMPTS,
+    CACHE_SIZE_BYTES,
     LOGIN_PROMPT_CONFIRM_ATTEMPTS,
     BrowserSettings,
     NeurogateUsageReader,
@@ -77,6 +78,8 @@ class BrowserReaderModeTest(unittest.TestCase):
 
         self.assertIn("--window-position=-32000,-32000", args)
         self.assertIn("--window-size=1440,950", args)
+        self.assertIn(f"--disk-cache-size={CACHE_SIZE_BYTES}", args)
+        self.assertIn(f"--media-cache-size={CACHE_SIZE_BYTES}", args)
 
     def test_visible_mode_uses_reachable_window_args(self):
         reader = NeurogateUsageReader(BrowserSettings(headless=False))
@@ -85,6 +88,29 @@ class BrowserReaderModeTest(unittest.TestCase):
 
         self.assertIn("--window-position=96,80", args)
         self.assertIn("--window-size=1180,860", args)
+
+    def test_profile_cache_cleanup_keeps_session_storage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            profile_dir = Path(directory) / "browser-profile"
+            cache_file = profile_dir / "Default" / "Cache" / "Cache_Data" / "file"
+            code_cache_file = profile_dir / "Default" / "Code Cache" / "js" / "file"
+            local_storage_file = profile_dir / "Default" / "Local Storage" / "leveldb" / "session"
+            session_storage_file = profile_dir / "Default" / "Session Storage" / "session"
+            cookie_file = profile_dir / "Default" / "Cookies"
+            for path in (cache_file, code_cache_file, local_storage_file, session_storage_file, cookie_file):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("data", encoding="utf-8")
+
+            reader = NeurogateUsageReader(BrowserSettings(profile_dir=profile_dir))
+            reader._write_debug = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+
+            reader._prune_browser_caches()
+
+            self.assertFalse((profile_dir / "Default" / "Cache").exists())
+            self.assertFalse((profile_dir / "Default" / "Code Cache").exists())
+            self.assertTrue(local_storage_file.exists())
+            self.assertTrue(session_storage_file.exists())
+            self.assertTrue(cookie_file.exists())
 
     def test_debug_log_does_not_store_raw_portal_text(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1,128 +1,154 @@
-# Комплексный аудит NeuroGate Overlay
+# Комплексный аудит NeuroGate API Overlay
 
-Дата: 14-06-2026  
-Объект: локальный Windows-оверлей `neurogate-overlay`  
-Тип проверки: senior engineering + QA + security review, без атакующих действий
+Дата: 15-06-2026
+Объект: локальный Windows-оверлей `neurogate-overlay`
+Режим: defensive senior engineering + QA + security review
+Границы: без DDoS, обхода авторизации, кражи данных, доступа к чужой информации или атакующих проверок
 
 ## Короткое резюме
 
-Проект стал заметно крепче: быстрый старт вынесен из UI-потока, Playwright работает через отдельный worker, логи больше не пишут сырой текст ЛК, размер логов ограничен, single-instance lock усилен, запуск пишет `overlay.pid`, ZIP-релизы собираются с SHA256, update checker передаёт updater именно release ZIP asset и checksum, а ZIP updater применяет allowlist и временный rollback.
+Проект в целом построен безопасно для своего класса: это local-first Windows-приложение, которое не забирает пароль, не отправляет cookies владельцу проекта, хранит сессию в локальном Chrome/Playwright profile и ограничивает собственные логи.
 
-Главные оставшиеся улучшения уже не блокируют релиз, но полезны для следующего уровня качества: заменить fallback-завершение старых процессов по regex на полноценный IPC, вынести парсер сайта в DOM-адаптеры и добавить визуальные regression-тесты.
+Самые важные проблемы были не в прямой утечке данных, а в устойчивости долгой работы: накопление canvas callback-команд, шумное перетаскивание окна, рост browser cache, отсутствие верхней границы у worker queue и мягкая политика checksum для ZIP update. Эти пункты уже исправлены локально в текущем рабочем дереве. Проверка проекта проходит: `powershell -ExecutionPolicy Bypass -File .\scripts\check.ps1` -> `106 tests OK`.
 
-## 10 конкретных проблем и рисков
+## 10 конкретных проблем или рисков
 
-### 1. Медленный визуальный старт и поздний вызов окна входа
-
-- Серьёзность: High.
-- Где: `src/neurogate_usage_overlay/__main__.py:61`, `src/neurogate_usage_overlay/reader_worker.py:13`, `src/neurogate_usage_overlay/reader_worker.py:28`, `src/neurogate_usage_overlay/browser_reader.py:20`.
-- Почему это проблема: пользователь видел оверлей раньше, чем реально начиналась загрузка страницы NeuroGate; при медленном сайте это выглядело как подвисание.
-- Как исправлено: добавлен `ThreadedUsageReader`, первый `refresh` стартует сразу в worker thread, UI создаётся параллельно с загрузкой браузера, login prompt подтверждается за 3 попытки вместо долгого ожидания.
-
-### 2. UI мог зависать во время чтения сайта
+### 1. Накопление Canvas callback-команд при каждом render
 
 - Серьёзность: High.
-- Где: `src/neurogate_usage_overlay/overlay.py:1338`, `src/neurogate_usage_overlay/reader_worker.py:13`.
-- Почему это проблема: Tkinter нельзя блокировать сетевыми/браузерными операциями; иначе курсор над оверлеем превращается в ожидание, а пользователь ощущает “программа зависла”.
-- Как исправлено: refresh выполняется асинхронно, результат возвращается в UI через `root.after(0, ...)`; добавлен тест `test_async_refresh_returns_before_slow_reader_finishes`.
+- Где: `src/neurogate_usage_overlay/overlay.py:187`, `src/neurogate_usage_overlay/overlay.py:1269`.
+- Почему это проблема: раньше tooltip/daily-limit обработчики навешивались заново при каждом `_render()`. Через час регулярных обновлений Tk мог накопить callback-команды, и события мыши начинали обрабатываться рывками.
+- Как исправить: биндинги должны быть одноразовыми при старте, а render должен менять только canvas-элементы и данные tooltip.
+- Статус: исправлено. Добавлен стабильный тег `tooltip-target`, словарь tooltip-текстов и тест `test_render_does_not_rebind_canvas_tags`.
 
-### 3. Sync Playwright небезопасно использовать из разных потоков
-
-- Серьёзность: High.
-- Где: `src/neurogate_usage_overlay/reader_worker.py:13`.
-- Почему это проблема: sync Playwright thread-bound; обращения из разных потоков могут давать greenlet/thread ошибки и нестабильное чтение ЛК.
-- Как исправлено: все операции Playwright сериализованы через один dedicated worker thread и queue.
-
-### 4. Debug logs могли хранить приватный текст страницы
+### 2. Перетаскивание окна генерировало слишком много UI-событий
 
 - Серьёзность: High.
-- Где: `src/neurogate_usage_overlay/browser_reader.py:578`, `src/neurogate_usage_overlay/browser_reader.py:593`, `src/neurogate_usage_overlay/log_utils.py:10`.
-- Почему это проблема: локальный debug log мог случайно сохранить почту, тариф, текст ЛК или другие приватные данные.
-- Как исправлено: сырой текст страницы не пишется; сохраняется только `text_len`, технические поля и компактная информация по окнам лимитов. Добавлен тест `test_debug_log_does_not_store_raw_portal_text`.
+- Где: `src/neurogate_usage_overlay/overlay.py:99`, `src/neurogate_usage_overlay/overlay.py:218`.
+- Почему это проблема: частый `geometry()` плюс `<Configure>` создавали шторм событий и сохранений позиции.
+- Как исправить: считать позицию по screen coordinates, применять перемещение с частотой кадра и сохранять координаты только после отпускания мыши.
+- Статус: исправлено. Drag ограничен через `DRAG_FRAME_MS = 16`, сохранение позиции во время drag отключено.
 
-### 5. Логи могли расти бесконечно
+### 3. Worker queue могла бесконтрольно ждать или копить команды
 
-- Серьёзность: Medium.
-- Где: `src/neurogate_usage_overlay/log_utils.py:10`, `src/neurogate_usage_overlay/overlay.py:1289`, `src/neurogate_usage_overlay/browser_reader.py:593`.
-- Почему это проблема: при длительной работе файлы могли разрастаться, занимать диск и увеличивать локальную приватную поверхность.
-- Как исправлено: добавлен bounded log writer, который оставляет свежий хвост файла; добавлен тест `test_append_bounded_log_trims_old_content`.
+- Серьёзность: High.
+- Где: `src/neurogate_usage_overlay/reader_worker.py:13`, `src/neurogate_usage_overlay/reader_worker.py:67`.
+- Почему это проблема: при зависании Playwright/Chrome вызовы worker могли ждать слишком долго. Это особенно опасно для команд из UI, например переключения режима браузера.
+- Как исправить: ограничить очередь, добавить timeout на worker calls, отменять просроченные future и быстро сообщать ошибку.
+- Статус: исправлено. Добавлены `WORKER_QUEUE_MAXSIZE = 4`, `WORKER_CALL_TIMEOUT_SECONDS = 90`, тесты на timeout и queue full.
 
-### 6. Single-instance lock был слабым в крайних Windows-сценариях
-
-- Серьёзность: Medium.
-- Где: `src/neurogate_usage_overlay/single_instance.py:42`, `tests/test_single_instance.py:23`.
-- Почему это проблема: при непустом lock-файле блокировка без явного `seek(0)` могла вести себя неочевидно, что повышало риск двойного запуска и борьбы за один Chrome profile.
-- Как исправлено: перед lock/unlock добавлен `seek(0)`, добавлен тест на непустой lock-файл.
-
-### 7. Скрипт запуска раньше завершал процессы только по regex
+### 4. Chrome/Playwright profile может расти за счёт cache
 
 - Серьёзность: Medium.
-- Где: `scripts/run-overlay.ps1`, `src/neurogate_usage_overlay/__main__.py`.
-- Почему это проблема: это помогает гасить старые экземпляры, но regex по процессам остаётся менее безопасным, чем управляемая команда остановки.
-- Как исправлено: приложение пишет `overlay.pid`, скрипт запуска сначала останавливает конкретный PID и очищает PID-файл. Regex fallback оставлен только для старых сборок без PID-файла.
-- Как улучшить глубже: заменить fallback на local IPC/named pipe, чтобы новый запуск отправлял старому процессу команду `stop`.
+- Где: `src/neurogate_usage_overlay/browser_reader.py:22`, `src/neurogate_usage_overlay/browser_reader.py:134`.
+- Почему это проблема: cookies/session нужны, но `Cache`, `Code Cache`, `GPUCache`, shader-cache и service-worker cache могут расти и влиять на запуск/отзывчивость.
+- Как исправить: чистить только безопасные cache-директории и ограничить disk/media cache Chrome, не трогая `Cookies`, `Local Storage`, `Session Storage`.
+- Статус: исправлено. Текущая runtime-папка около `31.2 MB`; добавлен тест, что cache чистится, а session storage остаётся.
 
-### 8. ZIP updater раньше не был связан с release asset и checksum end-to-end
-
-- Серьёзность: Medium.
-- Где: `src/neurogate_usage_overlay/update_checker.py:58`, `src/neurogate_usage_overlay/update_checker.py:109`, `src/neurogate_usage_overlay/overlay.py:778`, `scripts/update-and-restart.ps1:65`, `scripts/update-and-restart.ps1:147`.
-- Почему это проблема: упаковщик уже мог создавать `.sha256`, но updater по умолчанию мог брать GitHub source archive, рядом с которым checksum не публикуется. В таком виде integrity-проверка могла не сработать для обычного пользователя.
-- Как исправлено: update checker теперь читает GitHub Release assets, предпочитает `neurogate-overlay-*.zip`, забирает SHA256 из asset digest при наличии и передаёт `-ReleaseZipUrl` / `-ReleaseSha256` в updater. Добавлены тесты на release asset и checksum.
-
-### 9. ZIP update раньше широко заменял дерево проекта
+### 5. Update flow зависит от GitHub Release metadata
 
 - Серьёзность: Medium.
-- Где: `scripts/update-and-restart.ps1`.
-- Почему это проблема: широкое копирование дерева может перезаписать нестандартные локальные файлы пользователя внутри папки установки.
-- Как исправлено: ZIP updater обновляет только allowlist известных файлов проекта, делает временный бэкап затронутых файлов и откатывает их при ошибке копирования.
+- Где: `src/neurogate_usage_overlay/update_checker.py:84`, `src/neurogate_usage_overlay/update_checker.py:97`, `src/neurogate_usage_overlay/overlay.py:810`.
+- Почему это проблема: если GitHub API недоступен, release отсутствует или asset не прикреплён, пользователи не увидят корректное обновление.
+- Как исправить: держать graceful fallback, явно документировать, что полноценный auto-update требует GitHub Release asset ZIP + checksum.
+- Статус: частично закрыто. Код безопасно возвращает `None` при сетевых ошибках; нужен дисциплинированный release-процесс.
 
-### 10. Прогресс-бары зависят от DOM/CSS сайта
+### 6. ZIP update без checksum может продолжиться с предупреждением
 
 - Серьёзность: Medium.
-- Где: `src/neurogate_usage_overlay/browser_reader.py:473`.
-- Почему это проблема: если NeuroGate поменяет DOM, CSS-классы или цвет полосок, процент может читаться неверно.
-- Как исправить: оформить парсер как набор DOM-адаптеров, приоритетно читать `aria-valuenow`/семантические значения, хранить HTML fixtures разных версий страницы и тестировать fallback.
+- Где: `scripts/update-and-restart.ps1:65`, `scripts/update-and-restart.ps1:206`.
+- Почему это проблема: updater умеет SHA256, но если checksum не предоставлен, он продолжает работу. Это удобно для dev, но слабее для публичного канала обновлений.
+- Как исправить: для публичных ZIP-релизов требовать checksum обязательно, а режим без checksum оставить только для локальной разработки через явный флаг.
+- Статус: исправлено. ZIP update без checksum теперь останавливается; обход возможен только явно через `-AllowUnverifiedZip` или `NEUROGATE_ALLOW_UNVERIFIED_UPDATE=1` для локальной разработки.
+
+### 7. PowerShell update/restart запускается из приложения
+
+- Серьёзность: Medium.
+- Где: `src/neurogate_usage_overlay/overlay.py:839`, `scripts/update-and-restart.ps1`.
+- Почему это проблема: запуск внешнего скрипта всегда повышает риск regressions и требует аккуратной проверки аргументов/пути.
+- Как исправить: держать fixed script path внутри repo, не использовать shell interpolation, валидировать URL/checksum и покрывать update flow тестами.
+- Статус: закрыто на текущем уровне. `Popen` использует список аргументов, script path берётся из проекта, а ZIP update теперь требует checksum по умолчанию.
+
+### 8. Парсер зависит от текста и DOM сайта NeuroGate
+
+- Серьёзность: Medium.
+- Где: `src/neurogate_usage_overlay/parser.py`, `src/neurogate_usage_overlay/browser_reader.py:441`, `src/neurogate_usage_overlay/browser_reader.py:506`.
+- Почему это проблема: любое изменение сайта может сломать лимиты, прогресс-бары или статус входа.
+- Как исправить: хранить больше fixture-примеров страниц, добавить contract tests на новые версии страницы, разделить DOM-adapter и domain parser.
+- Статус: частично закрыто тестами на текущий и старый формат; нужен расширенный набор fixtures при каждом изменении сайта.
+
+### 9. UI-состояние и runtime diagnostics пока ограничены
+
+- Серьёзность: Low/Medium.
+- Где: `src/neurogate_usage_overlay/overlay.py`, `src/neurogate_usage_overlay/log_utils.py:10`.
+- Почему это проблема: при жалобах “через час тормозит” сейчас сложно быстро увидеть число renders, длительность refresh, размер profile/cache, очередь worker и активные таймеры.
+- Как исправить: добавить лёгкий diagnostic snapshot в bounded log: render count, refresh duration, worker queue size, browser profile/cache size.
+- Статус: открыто как полезное улучшение.
+
+### 10. Нет автоматического UI-smoke на реальном окне
+
+- Серьёзность: Low/Medium.
+- Где: `tests/test_overlay.py`, ручная проверка UI.
+- Почему это проблема: unit tests хорошо ловят логику, но не подтверждают реальную плавность drag, overlay geometry, tooltip и menu после часа работы.
+- Как исправить: добавить ручной/полуавтоматический long-run smoke: запустить overlay с fake reader на 60-90 минут, собрать CPU/memory/profile-size и проверить drag.
+- Статус: открыто; нужен длительный локальный прогон на Windows.
 
 ## Быстрые исправления на 1-2 часа
 
-- Добавить короткий startup health log без приватных данных: `startup_ms`, `first_snapshot_ms`, `login_prompt_ms`.
-- Добавить тест, что обновление запускается только по явному клику пользователя.
-- Добавить отдельный smoke-тест ZIP updater в временной установочной папке без реального перезапуска оверлея.
+- Закрепить в README/CHANGELOG новую проверку: `106 tests OK`.
+- Добавить короткий раздел “Производительность и локальные файлы”: какие файлы растут, какие ограничены, что чистится.
+- Сделать release checklist: ZIP asset + `.sha256` обязательны для публичного обновления.
+- Добавить diagnostic log строки для refresh duration и worker queue size.
+- Собрать `v1.7.2` ZIP и checksum после финального теста.
 
 ## Глубокие архитектурные улучшения
 
-- Заменить fallback process-kill regex на полноценный local IPC lifecycle.
-- Усилить updater цифровой подписью release manifest.
-- Вынести парсер портала в адаптеры версий DOM и покрыть HTML fixtures.
-- Добавить визуальные regression-тесты для compact/x2/menu/daily-limit states.
-- Расширить sleep/resume проверку на реальные Windows-сборки и разные длительности сна.
+- Поддерживать update integrity policy в строгом режиме: публичный ZIP без checksum не устанавливать.
+- Добавить long-run performance harness для fake overlay без реального NeuroGate.
+- Разделить browser DOM adapter и parser fixtures, чтобы легче переживать изменения сайта.
+- Добавить IPC/named pipe вместо любых fallback-поисков процессов.
+- Ввести лёгкую telemetry-only-local diagnostics page/file без приватных данных.
 
 ## Что нельзя проверить без доступа
 
-- Ошибки в консоли браузера и сетевых запросах реального портала NeuroGate без разрешения открыть живую авторизованную сессию и смотреть DevTools/Playwright network events.
-- Все варианты тарифов других пользователей: нужны реальные примеры DOM/текста страницы для разных тарифов.
-- Поведение под настоящим sleep/resume на разных Windows-сборках: нужен длительный ручной прогон на машинах пользователей.
-- Реальный update flow “v1.6 -> v1.7” через GitHub Releases: нужен опубликованный тестовый release asset ZIP + `.sha256`.
+- Реальную консоль браузера и network waterfall страницы NeuroGate: нужен живой логин пользователя в ЛК.
+- Реальные API-ответы NeuroGate: приложение читает UI, не имеет официального API token.
+- Поведение на других тарифах и аккаунтах: нужны fixtures или тестовый аккаунт с другим тарифом.
+- Долгий UX через 1-2 часа: нужен локальный long-run на Windows с открытым overlay.
+- GitHub Releases end-to-end: нужен созданный release с ZIP asset и `.sha256`.
 
-## Измеримый GOAL
+## GOAL
 
-Цель: устранить найденные проблемы так, чтобы:
+Цель: устранить найденные проблемы NeuroGate API Overlay так, чтобы:
 
-- пункты 1-9 были исправлены кодом и покрыты тестами или smoke-проверками;
-- пункт 10 был частично закрыт устойчивыми fallback-тестами, а полноценные DOM fixtures вынесены в следующий архитектурный этап;
-- `scripts/check.ps1` проходил полностью;
-- `scripts/package-release.ps1` собирал ZIP и `.sha256`;
-- живой запуск не блокировал UI и не писал raw portal text в debug log;
-- коммит и пуш выполнялись только после отдельного согласования.
+- не было накопления UI callback-команд при повторном render;
+- drag не блокировал UI и не писал state на каждом движении мыши;
+- worker queue не могла бесконтрольно расти или ждать бесконечно;
+- Chrome profile cache чистился безопасно без потери сессии;
+- логи и daily usage оставались bounded;
+- update flow требовал checksum для публичных ZIP-обновлений;
+- штатная проверка `scripts/check.ps1` проходила без регрессий.
+
+Критерий завершения текущего аудита: все критичные пункты 1-4 исправлены кодом и тестами, checksum policy усилена, отчёт обновлён, `scripts/check.ps1` проходит.
+
+Критерий принятия перед релизом: владелец перезапускает оверлей и подтверждает live-проверку drag после длительной работы.
 
 ## План исправления
 
-1. Закрыть быстрый старт и UI freeze: worker thread + async refresh.
-2. Закрыть приватность логов: убрать raw text + ограничить размер логов.
-3. Закрыть single-instance edge case.
-4. Закрыть ZIP integrity end-to-end: package `.sha256`, release asset URL, checksum в updater.
-5. Закрыть ZIP updater allowlist/rollback.
-6. Добавить watchdog после sleep/resume.
-7. Прогнать `scripts/check.ps1`.
-8. Проверить packaging smoke.
-9. Подготовить README/CHANGELOG под `1.7.0`.
+1. Закрыть UI callback leak и drag event storm.
+2. Закрыть worker queue/timeout риск.
+3. Ограничить рост Chrome cache без удаления сессии.
+4. Усилить ZIP update checksum policy.
+5. Обновить security/performance audit report.
+6. Прогнать `scripts/check.ps1`.
+7. После live-проверки владельцем обновить версию, README/CHANGELOG, собрать ZIP и сделать commit/push.
+
+## Уже выполнено в текущем рабочем дереве
+
+- Исправлен drag batching и сохранение позиции только после отпускания мыши.
+- Убрано повторное создание tooltip/daily-limit canvas bindings в `_render()`.
+- Добавлена безопасная очистка browser cache и Chrome cache size limits.
+- Добавлены timeout и max queue size для `ThreadedUsageReader`.
+- ZIP update без SHA256 теперь запрещён по умолчанию.
+- Добавлены regression tests.
+- Проверка: `106 tests OK`.

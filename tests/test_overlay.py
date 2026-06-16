@@ -46,6 +46,19 @@ class FakePositionRoot(FakeRoot):
         return self.y
 
 
+class FakeDragRoot(FakePositionRoot):
+    def __init__(self, x: int = 100, y: int = 120) -> None:
+        super().__init__(x, y)
+        self.geometry_calls: list[str] = []
+
+    def geometry(self, value: str) -> None:
+        self.geometry_calls.append(value)
+        if value.startswith("+"):
+            x_text, y_text = value[1:].split("+", 1)
+            self.x = int(x_text)
+            self.y = int(y_text)
+
+
 class OverlayScheduleTest(unittest.TestCase):
     def test_interval_choices_include_one_hour_without_two_minutes(self):
         self.assertEqual(UsageOverlay.INTERVAL_CHOICES_MINUTES, (1, 3, 5, 10, 15, 60))
@@ -230,6 +243,57 @@ class OverlayScheduleTest(unittest.TestCase):
 
 
 class OverlayPositionTest(unittest.TestCase):
+    def test_drag_uses_screen_coordinates_and_batches_geometry_updates(self):
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        overlay.root = FakeDragRoot(100, 120)
+        overlay.position_after_id = None
+        overlay.drag_after_id = None
+        overlay._hide_menu = lambda: None
+        overlay._hide_tooltip = lambda: None
+
+        overlay._start_drag(type("Event", (), {"x": 10, "y": 10, "x_root": 210, "y_root": 310})())
+        overlay._drag(type("Event", (), {"x": 14, "y": 14, "x_root": 260, "y_root": 360})())
+        first_after_id = overlay.drag_after_id
+        overlay._drag(type("Event", (), {"x": 20, "y": 20, "x_root": 280, "y_root": 390})())
+
+        self.assertEqual(overlay.root.after_calls, [UsageOverlay.DRAG_FRAME_MS])
+        self.assertEqual(overlay.root.geometry_calls, [])
+
+        overlay.root.callbacks[first_after_id]()
+
+        self.assertEqual(overlay.root.geometry_calls, ["+170+200"])
+
+    def test_configure_position_save_is_skipped_while_dragging(self):
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        overlay.root = FakeDragRoot(100, 120)
+        overlay.position_after_id = None
+        overlay.dragging = True
+        overlay._write_ui_log = lambda _message: None
+
+        overlay._remember_window_position_soon(type("Event", (), {"widget": overlay.root})())
+
+        self.assertEqual(overlay.root.after_calls, [])
+        self.assertIsNone(overlay.position_after_id)
+
+    def test_drag_release_applies_latest_position_and_saves_once(self):
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        overlay.root = FakeDragRoot(100, 120)
+        overlay.position_after_id = None
+        overlay.drag_after_id = None
+        overlay._hide_menu = lambda: None
+        overlay._hide_tooltip = lambda: None
+        saves = []
+        overlay._save_window_position = lambda: saves.append((overlay.root.winfo_x(), overlay.root.winfo_y()))
+
+        overlay._start_drag(type("Event", (), {"x": 10, "y": 10, "x_root": 210, "y_root": 310})())
+        overlay._drag(type("Event", (), {"x": 20, "y": 20, "x_root": 290, "y_root": 410})())
+        overlay._end_drag(type("Event", (), {})())
+
+        self.assertEqual(overlay.root.cancelled, ["after-1"])
+        self.assertEqual(overlay.root.geometry_calls, ["+180+220"])
+        self.assertEqual(saves, [(180, 220)])
+        self.assertFalse(overlay.dragging)
+
     def test_saved_position_is_clamped_inside_screen(self):
         overlay = UsageOverlay.__new__(UsageOverlay)
 
@@ -424,6 +488,47 @@ class OverlayProgressTest(unittest.TestCase):
 
 
 class OverlayRenderTest(unittest.TestCase):
+    def test_render_does_not_rebind_canvas_tags(self):
+        snapshot = UsageSnapshot(
+            updated_at=datetime.now(),
+            windows=[
+                UsageWindow(title="5 часов", credits_remaining=119_000_000, reset_text="2 часа"),
+                UsageWindow(title="7 дней", credits_remaining=421_300_000, reset_text="5 дней"),
+            ],
+        )
+        overlay = UsageOverlay(lambda: snapshot)
+        try:
+            overlay.last_snapshot = snapshot
+            overlay.daily_limit_credits = 82_000_000
+            overlay.daily_limit_set_at = datetime.now().astimezone()
+            today_spent = type("TodaySpend", (), {"amount": 10_900_000, "since_text": "00:00"})()
+            overlay.daily_usage = type("DailyUsage", (), {"today_spent_7d": lambda _self, _snapshot: today_spent})()
+            calls = []
+            original_tag_bind = overlay.canvas.tag_bind
+            overlay.canvas.tag_bind = lambda *args, **kwargs: calls.append((args, kwargs)) or original_tag_bind(*args, **kwargs)
+
+            overlay._render()
+            overlay._render()
+
+            self.assertEqual(calls, [])
+        finally:
+            overlay.close()
+
+    def test_tooltip_text_is_resolved_from_current_canvas_tag(self):
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        overlay.tooltip_text_by_tag = {"limit-value-7d": "сегодня потрачено: 10.4M"}
+
+        class Canvas:
+            def find_withtag(self, tag):
+                return (5,) if tag == "current" else ()
+
+            def gettags(self, _item):
+                return ("tooltip-target", "limit-value-7d")
+
+        event = type("Event", (), {"widget": Canvas()})()
+
+        self.assertEqual(overlay._tooltip_text_for_event(event), "сегодня потрачено: 10.4M")
+
     def test_daily_limit_row_has_double_click_editor_binding(self):
         snapshot = UsageSnapshot(
             updated_at=datetime.now(),

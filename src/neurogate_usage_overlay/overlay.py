@@ -97,6 +97,7 @@ class UsageOverlay:
     UPDATE_CHECK_SECONDS = 24 * 60 * 60
     RESUME_HEARTBEAT_SECONDS = 30
     RESUME_GAP_SECONDS = 120
+    DRAG_FRAME_MS = 16
     INTERVAL_CHOICES_MINUTES = (1, 3, 5, 10, 15, 60)
     if sys.platform == "darwin":
         UI_FONT = "SF Pro Text"
@@ -147,12 +148,20 @@ class UsageOverlay:
         self.status_text = "обновление"
         self.drag_x = 0
         self.drag_y = 0
+        self.drag_start_pointer_x = 0
+        self.drag_start_pointer_y = 0
+        self.drag_start_window_x = 0
+        self.drag_start_window_y = 0
+        self.drag_pending_position: tuple[int, int] | None = None
+        self.drag_after_id: str | None = None
+        self.dragging = False
         self.menu_window: tk.Toplevel | None = None
         self.tooltip_window: tk.Toplevel | None = None
+        self.tooltip_text_by_tag: dict[str, str] = {}
         self.position_after_id: str | None = None
 
         self.root = tk.Tk()
-        self.root.title("NeuroGate API 1.7.1")
+        self.root.title("NeuroGate API 1.7.2")
         self.root.geometry(self._initial_geometry())
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
@@ -185,18 +194,56 @@ class UsageOverlay:
         self.root.bind("<Escape>", lambda _event: self.close())
         self.root.bind("<Control-r>", lambda _event: self.refresh(force=True))
         self.canvas.tag_bind("interval", "<Button-1>", lambda _event: self._cycle_interval())
+        self.canvas.tag_bind("tooltip-target", "<Enter>", self._show_bound_tooltip)
+        self.canvas.tag_bind("tooltip-target", "<Motion>", self._move_tooltip)
+        self.canvas.tag_bind("tooltip-target", "<Leave>", lambda _event: self._hide_tooltip())
+        self.canvas.tag_bind("daily-limit-row", "<Double-Button-1>", lambda _event: self._edit_daily_limit())
 
     def _start_drag(self, event: tk.Event) -> None:
         self._hide_menu()
+        self._hide_tooltip()
         self.drag_x = event.x
         self.drag_y = event.y
+        self.drag_start_pointer_x = int(getattr(event, "x_root", event.x))
+        self.drag_start_pointer_y = int(getattr(event, "y_root", event.y))
+        self.drag_start_window_x = self.root.winfo_x()
+        self.drag_start_window_y = self.root.winfo_y()
+        self.drag_pending_position = None
+        self.dragging = True
+        if self.position_after_id:
+            try:
+                self.root.after_cancel(self.position_after_id)
+            except Exception:  # noqa: BLE001 - a stale timer must not break dragging.
+                pass
+            self.position_after_id = None
 
     def _drag(self, event: tk.Event) -> None:
-        x = self.root.winfo_x() + event.x - self.drag_x
-        y = self.root.winfo_y() + event.y - self.drag_y
+        pointer_x = int(getattr(event, "x_root", event.x))
+        pointer_y = int(getattr(event, "y_root", event.y))
+        x = self.drag_start_window_x + pointer_x - self.drag_start_pointer_x
+        y = self.drag_start_window_y + pointer_y - self.drag_start_pointer_y
+        self.drag_pending_position = (x, y)
+        if self.drag_after_id:
+            return
+        self.drag_after_id = self.root.after(self.DRAG_FRAME_MS, self._apply_pending_drag)
+
+    def _apply_pending_drag(self) -> None:
+        self.drag_after_id = None
+        if not self.drag_pending_position:
+            return
+        x, y = self.drag_pending_position
+        self.drag_pending_position = None
         self.root.geometry(f"+{x}+{y}")
 
     def _end_drag(self, _event: tk.Event) -> None:
+        if self.drag_after_id:
+            try:
+                self.root.after_cancel(self.drag_after_id)
+            except Exception:  # noqa: BLE001 - a stale timer must not break drag release.
+                pass
+            self.drag_after_id = None
+        self._apply_pending_drag()
+        self.dragging = False
         self._save_window_position()
 
     def _initial_geometry(self) -> str:
@@ -328,6 +375,8 @@ class UsageOverlay:
 
     def _remember_window_position_soon(self, event: tk.Event | None = None) -> None:
         if event is not None and event.widget is not self.root:
+            return
+        if getattr(self, "dragging", False):
             return
         try:
             if self.position_after_id:
@@ -527,6 +576,22 @@ class UsageOverlay:
         x = max(8, min(x, screen_width - width - 8))
         y = max(8, min(y, screen_height - height - 8))
         tooltip.geometry(f"+{x}+{y}")
+
+    def _tooltip_text_for_event(self, event: tk.Event) -> str | None:
+        try:
+            current_items = event.widget.find_withtag("current")
+            if not current_items:
+                return None
+            for tag in event.widget.gettags(current_items[0]):
+                text = self.tooltip_text_by_tag.get(tag)
+                if text:
+                    return text
+        except Exception:  # noqa: BLE001 - tooltip lookup must never affect the overlay.
+            return None
+        return None
+
+    def _show_bound_tooltip(self, event: tk.Event) -> None:
+        self._show_tooltip(event, self._tooltip_text_for_event(event))
 
     def _move_tooltip(self, event: tk.Event) -> None:
         if not self.tooltip_window:
@@ -1129,6 +1194,10 @@ class UsageOverlay:
         percent = self._window_progress_percent(window)
         tooltip = self._limit_tooltip_text(label, window)
         value_tag = f"limit-value-{window_key(window) or fallback_label}"
+        value_tags: str | tuple[str, ...] = value_tag
+        if tooltip:
+            self.tooltip_text_by_tag[value_tag] = tooltip
+            value_tags = (value_tag, "tooltip-target")
 
         self._text(9, y, label, "#9aa8ba", 9, "normal", family=self.UI_FONT)
         self._text(31, y, "остаток", "#667386", 8, "normal", family=self.UI_FONT)
@@ -1139,13 +1208,9 @@ class UsageOverlay:
             self._s(y + 16),
             fill="#101722",
             outline="",
-            tags=value_tag,
+            tags=value_tags,
         )
-        self._text(124, y + 8, value, "#ffb86b", 10, "bold", "center", tags=value_tag, family=self.NUMBER_FONT)
-        if tooltip:
-            self.canvas.tag_bind(value_tag, "<Enter>", lambda event, text=tooltip: self._show_tooltip(event, text))
-            self.canvas.tag_bind(value_tag, "<Motion>", lambda event: self._move_tooltip(event))
-            self.canvas.tag_bind(value_tag, "<Leave>", lambda _event: self._hide_tooltip())
+        self._text(124, y + 8, value, "#ffb86b", 10, "bold", "center", tags=value_tags, family=self.NUMBER_FONT)
         self._text(214, y + 2, reset, "#8793a4", 8, "normal", "ne", family=self.UI_FONT)
         self._progress(30, y + 17, 184, percent)
 
@@ -1183,6 +1248,7 @@ class UsageOverlay:
         color = "#ff4d5d" if percent >= 100 else "#ffe082"
         percent_color = "#8793a4"
         value_x = self._daily_limit_value_x()
+        self.tooltip_text_by_tag[value_tag] = tooltip
 
         self.canvas.create_rectangle(
             self._s(4),
@@ -1201,14 +1267,10 @@ class UsageOverlay:
             self._s(y + 16),
             fill="#101722",
             outline="",
-            tags=(row_tag, value_tag),
+            tags=(row_tag, value_tag, "tooltip-target"),
         )
-        self._text(value_x, y + 8, value, color, 9, "bold", "w", tags=(row_tag, value_tag), family=self.NUMBER_FONT)
+        self._text(value_x, y + 8, value, color, 9, "bold", "w", tags=(row_tag, value_tag, "tooltip-target"), family=self.NUMBER_FONT)
         self._text(214, y + 2, percent_text, percent_color, 8, "normal", "ne", tags=(row_tag, percent_tag), family=self.UI_FONT)
-        self.canvas.tag_bind(value_tag, "<Enter>", lambda event, text=tooltip: self._show_tooltip(event, text))
-        self.canvas.tag_bind(value_tag, "<Motion>", lambda event: self._move_tooltip(event))
-        self.canvas.tag_bind(value_tag, "<Leave>", lambda _event: self._hide_tooltip())
-        self.canvas.tag_bind(row_tag, "<Double-Button-1>", lambda _event: self._edit_daily_limit())
         self._daily_progress(30, y + 17, 184, percent, tags=row_tag)
 
     def _daily_limit_value_x(self) -> int:
@@ -1221,6 +1283,7 @@ class UsageOverlay:
     def _render(self) -> None:
         if self._expire_daily_limit_if_needed():
             self._resize_window_to_scale()
+        self.tooltip_text_by_tag = {}
         self.canvas.delete("all")
         content_height = self._content_height()
         self._rounded_rect(0, 0, self.WIDTH, content_height, 8, "#0d1118")
@@ -1389,6 +1452,9 @@ class UsageOverlay:
         if self.position_after_id:
             self.root.after_cancel(self.position_after_id)
             self.position_after_id = None
+        if self.drag_after_id:
+            self.root.after_cancel(self.drag_after_id)
+            self.drag_after_id = None
         self._hide_tooltip()
         self._save_window_position()
         self.root.destroy()

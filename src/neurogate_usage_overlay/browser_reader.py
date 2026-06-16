@@ -18,6 +18,20 @@ HIDDEN_WINDOW_ARGS = ("--window-position=-32000,-32000", "--window-size=1440,950
 LOGIN_CONFIRM_ATTEMPTS = 10
 LOGIN_PROMPT_CONFIRM_ATTEMPTS = 3
 AUTO_LOGIN_DELAY_ATTEMPTS = 3
+PROFILE_CACHE_DIRS = (
+    "GrShaderCache",
+    "ShaderCache",
+    "GraphiteDawnCache",
+    "GPUPersistentCache",
+    "Default/Cache",
+    "Default/Code Cache",
+    "Default/GPUCache",
+    "Default/DawnWebGPUCache",
+    "Default/DawnGraphiteCache",
+    "Default/Service Worker/CacheStorage",
+    "Default/Service Worker/ScriptCache",
+)
+CACHE_SIZE_BYTES = 16 * 1024 * 1024
 
 
 def _hide_windows_for_pids(process_ids: set[int]) -> int:
@@ -78,6 +92,7 @@ class NeurogateUsageReader:
             ) from exc
 
         self.settings.profile_dir.mkdir(parents=True, exist_ok=True)
+        self._prune_browser_caches()
         if not self._playwright:
             self._playwright = sync_playwright().start()
         self._launch_context(headless=self.settings.headless)
@@ -108,12 +123,28 @@ class NeurogateUsageReader:
             self._hide_hidden_browser_taskbar_windows()
 
     def _browser_args(self, hidden: bool) -> list[str]:
-        args = ["--disable-blink-features=AutomationControlled"]
+        args = [
+            "--disable-blink-features=AutomationControlled",
+            f"--disk-cache-size={CACHE_SIZE_BYTES}",
+            f"--media-cache-size={CACHE_SIZE_BYTES}",
+        ]
         if hidden:
             args.extend(HIDDEN_WINDOW_ARGS)
         else:
             args.extend(VISIBLE_WINDOW_ARGS)
         return args
+
+    def _prune_browser_caches(self) -> None:
+        for relative_path in PROFILE_CACHE_DIRS:
+            target = self.settings.profile_dir / Path(relative_path)
+            try:
+                if target.exists():
+                    shutil.rmtree(target)
+            except Exception as exc:  # noqa: BLE001 - cache cleanup must not block the overlay.
+                self._write_debug(
+                    parse_usage_text("", source_url=self.settings.usage_url),
+                    note=f"cache_cleanup_failed path={relative_path!r} error={exc!r}",
+                )
 
     def _hide_hidden_browser_taskbar_windows(self) -> int:
         if sys.platform.startswith("win"):
