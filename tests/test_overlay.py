@@ -734,21 +734,21 @@ class OverlayAccountTest(unittest.TestCase):
 
 class OverlayUpdateTest(unittest.TestCase):
     def test_display_version_drops_patch_zero(self):
-        self.assertEqual(display_version("2.0.0"), "v.2.0")
+        self.assertEqual(display_version("2.0"), "v.2.0")
         self.assertEqual(display_version("v2.1.0"), "v.2.1")
         self.assertEqual(display_version("2.1.3"), "v.2.1.3")
 
     def test_version_menu_label_reports_latest_version(self):
-        self.assertEqual(version_menu_label("2.0.0", None), "v.2.0 (последняя)")
+        self.assertEqual(version_menu_label("2.0", None), "v.2.0 (последняя)")
 
     def test_version_menu_label_reports_available_update(self):
         info = UpdateInfo(
-            current_version="2.0.0",
+            current_version="2.0",
             latest_version="2.1.0",
             release_url="https://github.com/RyandavisProject/vibemod/releases/tag/v2.1.0",
         )
 
-        self.assertEqual(version_menu_label("2.0.0", info), "v.2.0 (доступна v.2.1)")
+        self.assertEqual(version_menu_label("2.0", info), "v.2.0 (доступна v.2.1)")
 
     def test_version_menu_command_is_only_update_when_available(self):
         overlay = UsageOverlay.__new__(UsageOverlay)
@@ -757,7 +757,7 @@ class OverlayUpdateTest(unittest.TestCase):
         self.assertIsNone(overlay._version_menu_command())
 
         overlay.update_info = UpdateInfo(
-            current_version="2.0.0",
+            current_version="2.0",
             latest_version="2.1.0",
             release_url="https://github.com/RyandavisProject/vibemod/releases/tag/v2.1.0",
         )
