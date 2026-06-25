@@ -63,7 +63,13 @@ def _format_plan_days_left(value: object, now: datetime | None = None) -> str | 
     return f"{days} дн осталось"
 
 
-def _vibemode_window(title: str, used_value: object, total_value: object) -> UsageWindow | None:
+def _vibemode_window(
+    title: str,
+    used_value: object,
+    total_value: object,
+    *,
+    reset_text: str | None = None,
+) -> UsageWindow | None:
     used = _as_int(used_value)
     total = _as_int(total_value)
     if total is None or total <= 0:
@@ -75,6 +81,7 @@ def _vibemode_window(title: str, used_value: object, total_value: object) -> Usa
         limit_used=used,
         limit_total=total,
         credits_remaining=remaining,
+        reset_text=reset_text,
         progress_percent=min(100.0, (used / total) * 100),
     )
 
@@ -108,6 +115,7 @@ def _vibemode_text_window(title: str, text: str) -> UsageWindow | None:
     if not match:
         return None
     segment = match.group("segment")
+    reset_text = _vibemode_reset_text_from_segment(segment)
     used_total = re.search(
         r"(?P<used>\d+(?:[.,]\d+)?\s*[kкmмbб]?)\s*\n\s*из\s+(?P<total>\d+(?:[.,]\d+)?\s*[kкmмbб]?)",
         segment,
@@ -119,7 +127,49 @@ def _vibemode_text_window(title: str, text: str) -> UsageWindow | None:
         title,
         _parse_vibemode_amount(used_total.group("used")),
         _parse_vibemode_amount(used_total.group("total")),
+        reset_text=reset_text,
     )
+
+
+def _vibemode_reset_text_from_segment(segment: str) -> str | None:
+    match = re.search(r"Сброс\s+через\s+([^\n\r]+)", segment, flags=re.IGNORECASE)
+    return match.group(1).strip() if match else None
+
+
+def _vibemode_window_key(title: str) -> str:
+    if "5" in title:
+        return "5h"
+    if "7" in title:
+        return "7d"
+    return title.strip().lower()
+
+
+def _vibemode_reset_texts(text: str) -> dict[str, str]:
+    resets: dict[str, str] = {}
+    for title in ("5 часов", "7 дней"):
+        label = "5-часовое окно" if "5" in title else "7-дневное окно"
+        match = re.search(
+            rf"{re.escape(label)}(?P<segment>.*?)(?:\n\s*(?:КВОТА|CLAUDE|АКТИВНОСТЬ)\b|\Z)",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if not match:
+            continue
+        reset_text = _vibemode_reset_text_from_segment(match.group("segment"))
+        if reset_text:
+            resets[_vibemode_window_key(title)] = reset_text
+    return resets
+
+
+def _attach_vibemode_reset_texts(snapshot: UsageSnapshot, text: str) -> None:
+    if not text or not snapshot.windows:
+        return
+    resets = _vibemode_reset_texts(text)
+    if not resets:
+        return
+    for window in snapshot.windows:
+        if not window.reset_text:
+            window.reset_text = resets.get(_vibemode_window_key(window.title))
 
 
 def _snapshot_from_vibemode_text(text: str, *, source_url: str | None) -> UsageSnapshot | None:
@@ -211,6 +261,7 @@ def _snapshot_from_vibemode_api(
         default_row.get("creditLimit7Days"),
     )
     snapshot.windows = [window for window in (five_hour, seven_day) if window is not None]
+    _attach_vibemode_reset_texts(snapshot, raw_text)
     return snapshot if snapshot.has_data or snapshot.account else None
 
 

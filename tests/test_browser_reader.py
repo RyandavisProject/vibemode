@@ -55,6 +55,16 @@ class BrowserReaderModeTest(unittest.TestCase):
                 ],
             },
             source_url="https://portal.vibemod.pro/client",
+            raw_text="""
+            КВОТА
+            5-ЧАСОВОЕ ОКНО
+            7% ИСПОЛЬЗОВАНО
+            Сброс через 3ч 4м
+            КВОТА
+            7-ДНЕВНОЕ ОКНО
+            68% ИСПОЛЬЗОВАНО
+            Сброс через 20ч 7м
+            """,
         )
 
         self.assertIsNotNone(snapshot)
@@ -65,9 +75,11 @@ class BrowserReaderModeTest(unittest.TestCase):
         self.assertEqual(snapshot.windows[0].limit_used, 4_695_705)
         self.assertEqual(snapshot.windows[0].limit_total, 120_000_000)
         self.assertEqual(snapshot.windows[0].credits_remaining, 115_304_295)
+        self.assertEqual(snapshot.windows[0].reset_text, "3ч 4м")
         self.assertAlmostEqual(snapshot.windows[0].progress_percent or 0, 3.91, places=2)
         self.assertEqual(snapshot.windows[1].title, "7 дней")
         self.assertEqual(snapshot.windows[1].credits_remaining, 263_441_395)
+        self.assertEqual(snapshot.windows[1].reset_text, "20ч 7м")
         self.assertAlmostEqual(snapshot.windows[1].progress_percent or 0, 56.09, places=2)
 
     def test_snapshot_from_vibemode_dashboard_text_converts_used_to_remaining(self):
@@ -82,12 +94,14 @@ class BrowserReaderModeTest(unittest.TestCase):
             13.52M
             из 120.00M
             11% ИСПОЛЬЗОВАНО
+            Сброс через 3ч 4м
             КВОТА
             7-ДНЕВНОЕ ОКНО
             58%
             345.39M
             из 600.00M
             58% ИСПОЛЬЗОВАНО
+            Сброс через 20ч 7м
             CLAUDE
             5-ЧАСОВОЕ ОКНО
             —
@@ -104,10 +118,12 @@ class BrowserReaderModeTest(unittest.TestCase):
         self.assertEqual(snapshot.windows[0].credits_remaining, 106_480_000)
         self.assertEqual(snapshot.windows[0].limit_used, 13_520_000)
         self.assertEqual(snapshot.windows[0].limit_total, 120_000_000)
+        self.assertEqual(snapshot.windows[0].reset_text, "3ч 4м")
         self.assertAlmostEqual(snapshot.windows[0].progress_percent or 0, 11.27, places=2)
         self.assertEqual(snapshot.windows[1].credits_remaining, 254_610_000)
         self.assertEqual(snapshot.windows[1].limit_used, 345_390_000)
         self.assertEqual(snapshot.windows[1].limit_total, 600_000_000)
+        self.assertEqual(snapshot.windows[1].reset_text, "20ч 7м")
         self.assertAlmostEqual(snapshot.windows[1].progress_percent or 0, 57.565, places=3)
 
     def test_keep_browser_open_updates_settings_before_start(self):
