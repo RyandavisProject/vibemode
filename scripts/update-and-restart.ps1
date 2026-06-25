@@ -127,9 +127,10 @@ function Copy-ReleaseTree($SourceDir, $TargetDir) {
         "LICENSE",
         "SECURITY.md",
         "pyproject.toml",
+        "Install-Vibemod.bat"
         "Install-NeuroGate-API.bat"
     )
-    $BackupDir = Join-Path ([System.IO.Path]::GetTempPath()) "neurogate-overlay-backup-$([System.Guid]::NewGuid())"
+    $BackupDir = Join-Path ([System.IO.Path]::GetTempPath()) "vibemod-backup-$([System.Guid]::NewGuid())"
     $TouchedItems = New-Object System.Collections.Generic.List[string]
 
     try {
@@ -188,7 +189,7 @@ function Update-FromZipRelease {
         $VersionTag = "v$VersionTag"
     }
 
-    $TempRoot = Join-Path ([System.IO.Path]::GetTempPath()) "neurogate-overlay-update-$([System.Guid]::NewGuid())"
+    $TempRoot = Join-Path ([System.IO.Path]::GetTempPath()) "vibemod-update-$([System.Guid]::NewGuid())"
     $ZipPath = Join-Path $TempRoot "release.zip"
     $ExtractPath = Join-Path $TempRoot "extract"
     $ArchiveUrl = if ($ReleaseZipUrl) {
@@ -196,7 +197,7 @@ function Update-FromZipRelease {
     } elseif ($env:NEUROGATE_UPDATE_ZIP_URL) {
         $env:NEUROGATE_UPDATE_ZIP_URL
     } else {
-        "https://github.com/RyandavisProject/neurogate-overlay/archive/refs/tags/$VersionTag.zip"
+        "https://github.com/RyandavisProject/vibemod/archive/refs/tags/$VersionTag.zip"
     }
 
     try {
@@ -227,7 +228,7 @@ function Update-FromZipRelease {
 
 Push-Location $Root
 try {
-    Write-Host "Updating NeuroGate API overlay..."
+    Write-Host "Updating Vibemod overlay..."
     if ($TargetVersion) {
         Write-Host "Target version: $TargetVersion"
     }

@@ -4,20 +4,20 @@ Use this prompt with Codex, Claude Code, or another local coding agent that can
 run terminal commands on your Windows machine.
 
 ```text
-You are installing NeuroGate API from:
+You are installing Vibemod for VibeMode from:
 
-https://github.com/RyandavisProject/neurogate-overlay
+https://github.com/RyandavisProject/vibemod
 
 Goal:
 Install the local Windows overlay, create a desktop shortcut, launch it, and
 give the user a short plain-language installation report.
 
 Rules:
-- Do not ask the user for NeuroGate API or portal passwords.
+- Do not ask the user for VibeMode or portal passwords.
 - Do not collect, print, or store credentials.
-- The user must log in directly on the NeuroGate website if Chrome
+- The user must log in directly on the VibeMode website if Chrome
   opens a login page.
-- Do not click the NeuroGate login button for the user and do not rely on
+- Do not click the VibeMode login button for the user and do not rely on
   saved autofill credentials.
 - After login succeeds, the visible Chrome window should hide automatically
   and future overlay updates should continue from the same local browser session.
@@ -30,8 +30,8 @@ Rules:
 
 Steps:
 1. If the repository is not already cloned locally, clone it:
-   git clone https://github.com/RyandavisProject/neurogate-overlay.git
-   cd neurogate-overlay
+   git clone https://github.com/RyandavisProject/vibemod.git
+   cd vibemod
 2. Inspect the repository root and confirm these files exist:
    - README.md
    - pyproject.toml
@@ -47,7 +47,7 @@ Steps:
    powershell -ExecutionPolicy Bypass -File .\scripts\create-desktop-shortcut.ps1
 6. Launch the overlay:
    powershell -ExecutionPolicy Bypass -File .\scripts\run-overlay.ps1
-7. If Chrome opens a NeuroGate login page, tell the user:
+7. If Chrome opens a VibeMode login page, tell the user:
    "Please log in in this Chrome window. The app does not receive your password.
    After login, the visible browser will hide and updates will continue hidden."
 8. After launch, report:
@@ -58,9 +58,9 @@ Steps:
    - whether checks passed.
 
 Expected short report style:
-"Installed NeuroGate API. I created a local .venv, installed the package,
+"Installed Vibemod. I created a local .venv, installed the package,
 created the desktop shortcut, ran checks, and launched the overlay. The app does
-not collect passwords or API keys; login happens only on the NeuroGate
+not collect passwords or API keys; login happens only on the VibeMode
 website in the local Chrome profile."
 ```
 

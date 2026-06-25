@@ -64,7 +64,7 @@ assert_under_directory() {
 copy_release_tree() {
     local src_dir="$1"
     local target_dir="$2"
-    local allowed_items=("src" "scripts" "docs" "tests" "README.md" "CHANGELOG.md" "LICENSE" "SECURITY.md" "pyproject.toml" "Install-NeuroGate-API.bat")
+    local allowed_items=("src" "scripts" "docs" "tests" "README.md" "CHANGELOG.md" "LICENSE" "SECURITY.md" "pyproject.toml" "Install-Vibemod.bat" "Install-NeuroGate-API.bat")
     local backup_dir
     backup_dir="$(mktemp -d)"
     local touched=()
@@ -110,7 +110,7 @@ update_from_zip() {
     tmp_dir="$(mktemp -d)"
     local zip_path="$tmp_dir/release.zip"
     local extract_path="$tmp_dir/extract"
-    local archive_url="${RELEASE_ZIP_URL:-https://github.com/RyandavisProject/neurogate-overlay/archive/refs/tags/${version_tag}.zip}"
+    local archive_url="${RELEASE_ZIP_URL:-https://github.com/RyandavisProject/vibemod/archive/refs/tags/${version_tag}.zip}"
 
     trap 'rm -rf "$tmp_dir"' EXIT
 
@@ -138,7 +138,7 @@ update_from_zip() {
 # ── main ──────────────────────────────────────────────────────────────────────
 
 cd "$ROOT"
-echo "Updating NeuroGate API overlay..."
+echo "Updating Vibemod overlay..."
 [[ -n "$TARGET_VERSION" ]] && echo "Target version: $TARGET_VERSION"
 
 if [[ -d "$ROOT/.git" ]]; then

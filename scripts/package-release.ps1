@@ -18,8 +18,8 @@ if (-not $Version) {
     $Version = ($VersionLine.Line -replace 'version\s*=\s*"', '').Trim('"')
 }
 
-$PackageName = "neurogate-overlay-v$Version"
-$TempRoot = Join-Path ([System.IO.Path]::GetTempPath()) "neurogate-overlay-package-$([System.Guid]::NewGuid())"
+$PackageName = "vibemod-v$Version"
+$TempRoot = Join-Path ([System.IO.Path]::GetTempPath()) "vibemod-package-$([System.Guid]::NewGuid())"
 $Stage = Join-Path $TempRoot $PackageName
 $ZipPath = Join-Path $OutputDir "$PackageName.zip"
 $ChecksumPath = "$ZipPath.sha256"

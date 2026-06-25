@@ -5,6 +5,7 @@ from unittest.mock import patch
 from neurogate_usage_overlay.update_checker import (
     check_for_update,
     is_newer_version,
+    latest_release_api_url,
     normalize_version,
     _release_asset_info,
 )
@@ -27,6 +28,13 @@ class FakeResponse:
 class UpdateCheckerTest(unittest.TestCase):
     def test_normalize_version_strips_v_prefix(self):
         self.assertEqual(normalize_version("v1.5.0"), "1.5.0")
+
+    def test_latest_release_api_url_uses_vibemod_repo(self):
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(
+                latest_release_api_url(),
+                "https://api.github.com/repos/RyandavisProject/vibemod/releases/latest",
+            )
 
     def test_is_newer_version_compares_semver_parts(self):
         self.assertTrue(is_newer_version("v1.5.1", "1.5.0"))

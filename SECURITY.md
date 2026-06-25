@@ -1,13 +1,14 @@
 ﻿# Security
 
-This project must not collect, request, store or transmit NeuroGate
+This project must not collect, request, store or transmit VibeMode
 passwords, API keys, cookies, or browser profile folders.
 
 ## Login model
 
-- Users log in directly on `https://portal.neurogate.space/client/usage`.
+- Users log in directly on `https://portal.vibemod.pro/client`.
 - The overlay opens a local browser profile and reuses that session.
-- The app reads visible usage text from the page.
+- The app reads usage values from the VibeMode cabinet API using the user's
+  existing local browser session, with visible-page parsing as a fallback.
 - No password field is exposed by the app.
 - The app has no telemetry, backend, or analytics endpoint.
 - The browser runs hidden after successful login by default. A visible Chrome

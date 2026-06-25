@@ -36,5 +36,5 @@ if [[ "$NO_SHORTCUT" -eq 0 ]]; then
 fi
 
 echo ""
-echo "Installed NeuroGate API."
+echo "Installed Vibemod."
 echo "Run: ./scripts/run-overlay.sh"

@@ -1,28 +1,35 @@
 ﻿# Privacy
 
-NeuroGate API is designed to be local-first.
+Vibemod is designed to be local-first.
 
 ## What The App Reads
 
-The app reads text visible on:
+The app opens the local account page:
 
 ```text
-https://portal.neurogate.space/client/usage
+https://portal.vibemod.pro/client
 ```
 
-It parses the values needed for the desktop overlay:
+For the current VibeMode cabinet, the app reads the values through the cabinet
+API from the same local browser session:
+
+```text
+https://api.vibemod.pro/client/profile
+https://api.vibemod.pro/client/usage/limits
+```
+
+It parses only the values needed for the desktop overlay:
 
 - account label;
 - 5-hour remaining credits;
 - 7-day remaining credits;
 - current-window spending tooltip values;
 - current-day spending tooltip values;
-- reset times;
 - refresh status.
 
 The browser is hidden by default after login. If the saved browser session is
 expired, the app opens a visible Chrome window so the user can log in directly
-on the NeuroGate website. After a successful read, that visible window
+on the VibeMode website. After a successful read, that visible window
 is hidden and later updates continue from the same local browser session.
 
 The user can temporarily keep the account page visible with the `Не закрывать ЛК`
@@ -30,9 +37,9 @@ menu toggle. Turning the toggle off hides the visible Chrome window and returns
 the app to hidden mode. This does not change the privacy boundary: the app still
 uses the local Chrome profile and does not collect credentials.
 
-The user can switch NeuroGate accounts from the overlay menu with
+The user can switch VibeMode accounts from the overlay menu with
 `Сменить аккаунт`. This closes the current browser context, removes only the
-overlay's local browser profile, and opens a fresh NeuroGate login window.
+overlay's local browser profile, and opens a fresh VibeMode login window.
 Automatic login clicks are blocked during this account-switch flow until the
 user successfully logs in to the new account. It does not touch the user's
 normal Chrome profile.
@@ -42,17 +49,18 @@ normal Chrome profile.
 - It does not ask for a password.
 - It does not ask for an API key.
 - It does not upload usage data.
-- It does not run a local web server.
+- It does not expose a public web server. On macOS it uses a tiny
+  `127.0.0.1`-only server to render the menu-bar popover locally.
 - It does not include analytics.
 - It does not write network traces by default.
 - It does not keep a visible browser window open after successful login unless
   the user starts it with `--show-browser` or enables `Не закрывать ЛК` in the
   overlay menu.
 - It may automatically press the login button only for normal session recovery,
-  when the NeuroGate login form is already filled by the local browser and stays
+  when the VibeMode login form is already filled by the local browser and stays
   unchanged for several seconds. It does not store the password; it only checks
   whether the local form is filled. During `Сменить аккаунт`, automatic login is
-  disabled and the user confirms login manually on the NeuroGate website.
+  disabled and the user confirms login manually on the VibeMode website.
 
 ## Local Files
 
@@ -105,4 +113,3 @@ their own computer.
 
 When sharing screenshots, bug reports, or GitHub issues, remove account names,
 request IDs, usage numbers, and any browser/session files.
-

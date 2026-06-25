@@ -1,6 +1,6 @@
 import unittest
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -8,13 +8,108 @@ from neurogate_usage_overlay.browser_reader import (
     AUTO_LOGIN_DELAY_ATTEMPTS,
     CACHE_SIZE_BYTES,
     LOGIN_PROMPT_CONFIRM_ATTEMPTS,
+    USAGE_URL,
     BrowserSettings,
     NeurogateUsageReader,
+    _format_plan_days_left,
+    _snapshot_from_vibemode_api,
+    _snapshot_from_vibemode_text,
 )
 from neurogate_usage_overlay.models import UsageSnapshot, UsageWindow
 
 
 class BrowserReaderModeTest(unittest.TestCase):
+    def test_default_usage_url_points_to_vibemode_dashboard(self):
+        self.assertEqual(USAGE_URL, "https://portal.vibemod.pro/client")
+
+    def test_format_plan_days_left_uses_ceiling_days(self):
+        now = datetime(2026, 6, 25, 6, 0, tzinfo=timezone.utc)
+
+        self.assertEqual(_format_plan_days_left("2026-06-26T07:00:00+00:00", now=now), "2 дн осталось")
+
+    def test_snapshot_from_vibemode_api_converts_used_to_remaining(self):
+        snapshot = _snapshot_from_vibemode_api(
+            {
+                "currentPlanCode": "ascend",
+                "plan": {
+                    "name": "Ascend",
+                    "endsAt": "2026-07-12T13:15:55.09452+00:00",
+                },
+            },
+            {
+                "rows": [
+                    {
+                        "scope": "default",
+                        "creditLimit5Hours": 120_000_000,
+                        "creditLimit7Days": 600_000_000,
+                        "credits5Hours": 4_695_705,
+                        "credits7Days": 336_558_605,
+                    },
+                    {
+                        "scope": "anthropic_compatible",
+                        "creditLimit5Hours": 0,
+                        "creditLimit7Days": 0,
+                        "credits5Hours": 0,
+                        "credits7Days": 0,
+                    },
+                ],
+            },
+            source_url="https://portal.vibemod.pro/client",
+        )
+
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        self.assertEqual(snapshot.account, "Ascend")
+        self.assertEqual(len(snapshot.windows), 2)
+        self.assertEqual(snapshot.windows[0].title, "5 часов")
+        self.assertEqual(snapshot.windows[0].limit_used, 4_695_705)
+        self.assertEqual(snapshot.windows[0].limit_total, 120_000_000)
+        self.assertEqual(snapshot.windows[0].credits_remaining, 115_304_295)
+        self.assertAlmostEqual(snapshot.windows[0].progress_percent or 0, 3.91, places=2)
+        self.assertEqual(snapshot.windows[1].title, "7 дней")
+        self.assertEqual(snapshot.windows[1].credits_remaining, 263_441_395)
+        self.assertAlmostEqual(snapshot.windows[1].progress_percent or 0, 56.09, places=2)
+
+    def test_snapshot_from_vibemode_dashboard_text_converts_used_to_remaining(self):
+        snapshot = _snapshot_from_vibemode_text(
+            """
+            ПЛАН
+            Ascend
+            18 ДН ОСТАЛОСЬ
+            КВОТА
+            5-ЧАСОВОЕ ОКНО
+            11%
+            13.52M
+            из 120.00M
+            11% ИСПОЛЬЗОВАНО
+            КВОТА
+            7-ДНЕВНОЕ ОКНО
+            58%
+            345.39M
+            из 600.00M
+            58% ИСПОЛЬЗОВАНО
+            CLAUDE
+            5-ЧАСОВОЕ ОКНО
+            —
+            —
+            Нет в текущем тарифе
+            """,
+            source_url="https://portal.vibemod.pro/client",
+        )
+
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        self.assertEqual(snapshot.account, "Ascend")
+        self.assertEqual(snapshot.plan_status, "18 дн осталось")
+        self.assertEqual(snapshot.windows[0].credits_remaining, 106_480_000)
+        self.assertEqual(snapshot.windows[0].limit_used, 13_520_000)
+        self.assertEqual(snapshot.windows[0].limit_total, 120_000_000)
+        self.assertAlmostEqual(snapshot.windows[0].progress_percent or 0, 11.27, places=2)
+        self.assertEqual(snapshot.windows[1].credits_remaining, 254_610_000)
+        self.assertEqual(snapshot.windows[1].limit_used, 345_390_000)
+        self.assertEqual(snapshot.windows[1].limit_total, 600_000_000)
+        self.assertAlmostEqual(snapshot.windows[1].progress_percent or 0, 57.565, places=3)
+
     def test_keep_browser_open_updates_settings_before_start(self):
         reader = NeurogateUsageReader(BrowserSettings())
 
@@ -346,6 +441,30 @@ class BrowserReaderModeTest(unittest.TestCase):
         self.assertIn("EMAIL", text)
         self.assertEqual(attempts, LOGIN_PROMPT_CONFIRM_ATTEMPTS)
 
+    def test_wait_for_usage_text_returns_vibemode_dashboard_quickly(self):
+        reader = NeurogateUsageReader(BrowserSettings(headless=True))
+        attempts = 0
+
+        class Locator:
+            def inner_text(self, timeout: int) -> str:
+                nonlocal attempts
+                attempts += 1
+                return "Квота\n5-часовое окно\nКвота\n7-дневное окно"
+
+        class Page:
+            def wait_for_timeout(self, _timeout: int) -> None:
+                return None
+
+            def locator(self, _selector: str) -> Locator:
+                return Locator()
+
+        reader._page = Page()
+
+        text = reader._wait_for_usage_text()
+
+        self.assertIn("5-часовое окно", text)
+        self.assertEqual(attempts, 1)
+
     def test_successful_visible_login_hides_current_window(self):
         reader = NeurogateUsageReader(BrowserSettings(headless=True))
         reader._current_headless = False
@@ -438,6 +557,23 @@ class BrowserReaderModeTest(unittest.TestCase):
         reader._page = Page()
 
         self.assertFalse(reader._current_page_has_usage_data())
+
+    def test_current_page_with_vibemode_dashboard_is_treated_as_loaded_usage(self):
+        reader = NeurogateUsageReader(BrowserSettings(headless=True))
+
+        class Locator:
+            def inner_text(self, timeout: int) -> str:
+                return "Мой дашборд\nКвота\n5-часовое окно\nКвота\n7-дневное окно"
+
+        class Page:
+            url = "https://portal.vibemod.pro/client"
+
+            def locator(self, _selector: str) -> Locator:
+                return Locator()
+
+        reader._page = Page()
+
+        self.assertTrue(reader._current_page_has_usage_data())
 
     def test_auto_login_submits_stable_prefilled_form(self):
         reader = NeurogateUsageReader(BrowserSettings(headless=True))
@@ -570,7 +706,7 @@ class BrowserReaderModeTest(unittest.TestCase):
         ]
         snapshot = UsageSnapshot(
             updated_at=datetime.now(),
-            windows=[UsageWindow(title="5 С‡Р°СЃРѕРІ"), UsageWindow(title="7 РґРЅРµР№")],
+            windows=[UsageWindow(title="5 часов"), UsageWindow(title="7 дней")],
         )
 
         reader._attach_window_progress(snapshot)

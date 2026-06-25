@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from .browser_reader import BrowserSettings, NeurogateUsageReader, USAGE_URL
@@ -12,6 +13,10 @@ from .single_instance import SingleInstanceLock
 
 if sys.platform == "darwin":
     from .overlay import MenuBarOverlay  # type: ignore[attr-defined]
+
+
+def _snapshot_for_console(snapshot):
+    return replace(snapshot, raw_text="[hidden]")
 
 
 def _write_pid_file(path: Path) -> None:
@@ -30,7 +35,7 @@ def _remove_pid_file(path: Path) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="NeuroGate API usage overlay.")
+    parser = argparse.ArgumentParser(description="Vibemod usage overlay.")
     parser.add_argument("--url", default=USAGE_URL, help="Usage page URL.")
     parser.add_argument("--interval", type=int, default=60, help="Refresh interval in seconds.")
     parser.add_argument(
@@ -61,7 +66,7 @@ def main() -> int:
     state_dir = args.profile_dir.parent
     lock = SingleInstanceLock(state_dir / "overlay.lock")
     if not lock.acquire():
-        print("NeuroGate API overlay is already running.")
+        print("Vibemod overlay is already running.")
         return 0
     pid_file = state_dir / "overlay.pid"
     _write_pid_file(pid_file)
@@ -77,7 +82,7 @@ def main() -> int:
             reader = NeurogateUsageReader(settings)
             reader.start()
             snapshot = reader.read()
-            print(snapshot)
+            print(_snapshot_for_console(snapshot))
             reader.stop()
             return 0
         reader = ThreadedUsageReader(settings)

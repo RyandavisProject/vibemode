@@ -20,7 +20,7 @@ if [[ -f "$PID_FILE" ]]; then
     RECORDED_PID="$(cat "$PID_FILE" 2>/dev/null | tr -d '[:space:]')"
     if [[ -n "$RECORDED_PID" ]] && kill -0 "$RECORDED_PID" 2>/dev/null; then
         CMDLINE="$(ps -p "$RECORDED_PID" -o args= 2>/dev/null || true)"
-        if echo "$CMDLINE" | grep -qE 'neurogate_usage_overlay|neurogate-overlay|neurogate-api|vibemode-overlay|neurogate-usage-overlay'; then
+        if echo "$CMDLINE" | grep -qE 'neurogate_usage_overlay|vibemod|vibemod|neurogate-api|vibemode-overlay|neurogate-usage-overlay'; then
             kill "$RECORDED_PID" 2>/dev/null || true
             sleep 0.5
         fi
@@ -33,7 +33,7 @@ fi
 _self_pids="$$"
 [[ -n "${PPID:-}" ]] && _self_pids="$$|$PPID"
 
-pgrep -f 'neurogate_usage_overlay|neurogate-overlay|neurogate-api|vibemode-overlay|neurogate-usage-overlay' \
+pgrep -f 'neurogate_usage_overlay|vibemod|vibemod|neurogate-api|vibemode-overlay|neurogate-usage-overlay' \
     | grep -Ev "^($_self_pids)$" \
     | while read -r pid; do kill "$pid" 2>/dev/null || true; done || true
 

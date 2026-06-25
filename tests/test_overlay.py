@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from neurogate_usage_overlay.models import UsageSnapshot, UsageWindow
-from neurogate_usage_overlay.overlay import UsageOverlay, compact_percent
+from neurogate_usage_overlay.overlay import UsageOverlay, compact_percent, display_version, version_menu_label
 from neurogate_usage_overlay.update_checker import UpdateInfo
 
 
@@ -548,6 +548,11 @@ class OverlayRenderTest(unittest.TestCase):
             percent_items = overlay.canvas.find_withtag("daily-limit-percent")
             self.assertEqual(len(percent_items), 1)
             self.assertEqual(overlay.canvas.itemcget(percent_items[0], "text"), "13%")
+            value_items = overlay.canvas.find_withtag("daily-limit-value")
+            self.assertGreaterEqual(len(value_items), 1)
+            for item in value_items:
+                self.assertNotIn("tooltip-target", overlay.canvas.gettags(item))
+            self.assertNotIn("daily-limit-value", overlay.tooltip_text_by_tag)
         finally:
             overlay.close()
 
@@ -728,6 +733,40 @@ class OverlayAccountTest(unittest.TestCase):
 
 
 class OverlayUpdateTest(unittest.TestCase):
+    def test_display_version_drops_patch_zero(self):
+        self.assertEqual(display_version("2.0.0"), "v.2.0")
+        self.assertEqual(display_version("v2.1.0"), "v.2.1")
+        self.assertEqual(display_version("2.1.3"), "v.2.1.3")
+
+    def test_version_menu_label_reports_latest_version(self):
+        self.assertEqual(version_menu_label("2.0.0", None), "v.2.0 (последняя)")
+
+    def test_version_menu_label_reports_available_update(self):
+        info = UpdateInfo(
+            current_version="2.0.0",
+            latest_version="2.1.0",
+            release_url="https://github.com/RyandavisProject/vibemod/releases/tag/v2.1.0",
+        )
+
+        self.assertEqual(version_menu_label("2.0.0", info), "v.2.0 (доступна v.2.1)")
+
+    def test_version_menu_command_is_only_update_when_available(self):
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        overlay.update_info = None
+
+        self.assertIsNone(overlay._version_menu_command())
+
+        overlay.update_info = UpdateInfo(
+            current_version="2.0.0",
+            latest_version="2.1.0",
+            release_url="https://github.com/RyandavisProject/vibemod/releases/tag/v2.1.0",
+        )
+
+        command = overlay._version_menu_command()
+        self.assertIsNotNone(command)
+        assert command is not None
+        self.assertIs(command.__func__, overlay._start_update.__func__)
+
     def test_start_update_launches_update_script_with_target_version(self):
         overlay = UsageOverlay.__new__(UsageOverlay)
         overlay.update_info = UpdateInfo(

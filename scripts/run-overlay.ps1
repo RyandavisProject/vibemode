@@ -30,7 +30,7 @@ function Stop-OverlayFromPidFile {
         $Existing -and
         $Existing.Name -in @('python.exe', 'pythonw.exe', 'py.exe') -and
         $Existing.CommandLine -and
-        $Existing.CommandLine -match '(\-m\s+neurogate_usage_overlay|neurogate-overlay|neurogate-api|vibemode-overlay|neurogate-usage-overlay)'
+        $Existing.CommandLine -match '(\-m\s+neurogate_usage_overlay|vibemod|vibemod|neurogate-api|vibemode-overlay|neurogate-usage-overlay)'
     ) {
         Stop-OverlayProcess $Existing
         Start-Sleep -Milliseconds 500
@@ -57,7 +57,7 @@ Get-CimInstance Win32_Process |
         (
             (
                 $_.Name -in @('python.exe', 'pythonw.exe', 'py.exe') -and
-                $CommandLine -match '(\-m\s+neurogate_usage_overlay|neurogate-overlay|neurogate-api|vibemode-overlay|neurogate-usage-overlay)'
+                $CommandLine -match '(\-m\s+neurogate_usage_overlay|vibemod|vibemod|neurogate-api|vibemode-overlay|neurogate-usage-overlay)'
             ) -or
             ($_.Name -eq 'node.exe' -and $CommandLine -match $EscapedRoot) -or
             ($_.Name -eq 'chrome.exe' -and $CommandLine -match $EscapedProfilePath)

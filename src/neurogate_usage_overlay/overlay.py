@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
+from . import __version__
 from .history import DailyUsageStore, find_window, spent_since_reset, window_key
 from .log_utils import append_bounded_log
 from .models import UsageSnapshot, UsageWindow
@@ -53,6 +54,23 @@ def compact_percent(value: float | None) -> str:
     if value >= 10:
         return f"{value:.0f}%"
     return f"{value:.1f}%"
+
+
+def display_version(value: str) -> str:
+    cleaned = value.strip()
+    if cleaned.lower().startswith("v"):
+        cleaned = cleaned[1:]
+    parts = cleaned.split(".")
+    if len(parts) >= 3 and parts[-1] == "0":
+        cleaned = ".".join(parts[:-1])
+    return f"v.{cleaned}"
+
+
+def version_menu_label(current_version: str, update_info: UpdateInfo | None) -> str:
+    current = display_version(current_version)
+    if update_info:
+        return f"{current} (доступна {display_version(update_info.latest_version)})"
+    return f"{current} (последняя)"
 
 
 def compact_reset_text(value: str | None) -> str:
@@ -161,7 +179,7 @@ class UsageOverlay:
         self.position_after_id: str | None = None
 
         self.root = tk.Tk()
-        self.root.title("NeuroGate API 1.7.2")
+        self.root.title(f"Vibemod {__version__}")
         self.root.geometry(self._initial_geometry())
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
@@ -437,17 +455,10 @@ class UsageOverlay:
                 for minutes in self.INTERVAL_CHOICES_MINUTES
             ],
         ]
-        if self.update_info:
-            rows.extend(
-                [
-                    ("", None, False),
-                    (f"Доступна {self.update_info.latest_label}", None, False),
-                    (f"Обновить до {self.update_info.latest_label}", self._start_update, False),
-                ]
-            )
         rows.extend(
             [
                 ("", None, False),
+                (self._version_menu_label(), self._version_menu_command(), False),
                 ("Сменить аккаунт", self._reset_account if self.account_resetter else None, False),
                 ("Закрыть", self.close, False),
             ]
@@ -529,6 +540,12 @@ class UsageOverlay:
         menu.bind("<Escape>", lambda _event: self._hide_menu())
         menu.bind("<FocusOut>", lambda _event: self._hide_menu())
         menu.focus_force()
+
+    def _version_menu_label(self) -> str:
+        return version_menu_label(__version__, self.update_info)
+
+    def _version_menu_command(self) -> Callable[[], None] | None:
+        return self._start_update if self.update_info else None
 
     def _hide_menu(self) -> None:
         if not self.menu_window:
@@ -1238,17 +1255,15 @@ class UsageOverlay:
         values = self._daily_limit_values()
         if not values:
             return
-        spent, limit, floor, percent = values
+        spent, limit, _floor, percent = values
         value = f"{short_number_clean(spent)} / {short_number_clean(limit)}"
         percent_text = compact_percent(percent)
-        tooltip = self._daily_limit_hint()
         row_tag = "daily-limit-row"
         value_tag = "daily-limit-value"
         percent_tag = "daily-limit-percent"
         color = "#ff4d5d" if percent >= 100 else "#ffe082"
         percent_color = "#8793a4"
         value_x = self._daily_limit_value_x()
-        self.tooltip_text_by_tag[value_tag] = tooltip
 
         self.canvas.create_rectangle(
             self._s(4),
@@ -1267,9 +1282,9 @@ class UsageOverlay:
             self._s(y + 16),
             fill="#101722",
             outline="",
-            tags=(row_tag, value_tag, "tooltip-target"),
+            tags=(row_tag, value_tag),
         )
-        self._text(value_x, y + 8, value, color, 9, "bold", "w", tags=(row_tag, value_tag, "tooltip-target"), family=self.NUMBER_FONT)
+        self._text(value_x, y + 8, value, color, 9, "bold", "w", tags=(row_tag, value_tag), family=self.NUMBER_FONT)
         self._text(214, y + 2, percent_text, percent_color, 8, "normal", "ne", tags=(row_tag, percent_tag), family=self.UI_FONT)
         self._daily_progress(30, y + 17, 184, percent, tags=row_tag)
 
@@ -1304,7 +1319,7 @@ class UsageOverlay:
             )
             return
 
-        account = snapshot.account if snapshot and snapshot.account else "NeuroGate"
+        account = snapshot.account if snapshot and snapshot.account else "Vibemod"
         plan_status = compact_plan_status(snapshot.plan_status if snapshot else None)
         plan_text = plan_status or self.status_text
         account_x = 12
@@ -1378,7 +1393,7 @@ class UsageOverlay:
         self.status_text = "ошибка"
         self._write_ui_log(f"error {error!r}")
         self._render()
-        print(f"NeuroGate API overlay error: {error}")
+        print(f"Vibemod overlay error: {error}")
 
     def _write_ui_log(self, message: str) -> None:
         try:
@@ -1481,7 +1496,7 @@ if sys.platform == "darwin":
                 pass
 
     class MenuBarOverlay:
-        """macOS menu bar status item showing NeuroGate API usage.
+        """macOS menu bar status item showing Vibemod usage.
 
         Displays a compact title (e.g. "NG 82.3M") in the menu bar; clicking it
         reveals a dropdown with per-window limits, settings, and actions.
@@ -1670,14 +1685,14 @@ if sys.platform == "darwin":
         def _menu_bar_title(self) -> str:
             snap = self.last_snapshot
             if not snap or not snap.has_data:
-                return "NG …"
+                return "NG ..."
             # Show remaining credits from the shortest window (5h), fall back to 7d.
             window = snap.windows[0] if snap.windows else None
             if window and window.credits_remaining is not None:
                 return f"NG {short_number(window.credits_remaining)}"
             if snap.remaining is not None:
                 return f"NG {short_number(snap.remaining)}"
-            return "NG ?"
+            return "NG ..."
 
         # ------------------------------------------------------------------ server actions
 
@@ -1702,8 +1717,8 @@ if sys.platform == "darwin":
                 "has_keep_toggle": self._has_keep_browser_toggle(),
                 "interval_label": interval_label,
                 "has_account_reset": bool(self.account_resetter),
-                "update_available": bool(self.update_info),
-                "update_label": self.update_info.latest_label if self.update_info else "",
+                "version_label": version_menu_label(__version__, self.update_info),
+                "version_update_available": bool(self.update_info),
             }
             self._server.update(snap, extra)
             if self._popover_ui:
@@ -1972,12 +1987,12 @@ if sys.platform == "darwin":
             from Foundation import NSTimer, NSRunLoop, NSDefaultRunLoopMode
 
             app = NSApplication.sharedApplication()
-            app.setActivationPolicy_(1)  # NSApplicationActivationPolicyAccessory — no Dock icon
+            app.setActivationPolicy_(1)  # NSApplicationActivationPolicyAccessory: no Dock icon
 
             # Install the popover status item on main thread
             self._popover_ui = self._MenuBarPopover(
                 server_url=self._server.get_url(),
-                initial_title="NG …",
+                initial_title="NG ...",
             )
             self._popover_ui.install()
 

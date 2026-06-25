@@ -3,14 +3,14 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "neurogate-overlay"
-version = "1.8.0"
-description = "Always-on-top overlay for NeuroGate API usage limits (Windows & macOS)."
+name = "vibemod"
+version = "2.0.0"
+description = "Vibemod overlay for VibeMode API usage limits (Windows & macOS)."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [{ name = "NeuroGate API contributors" }]
-keywords = ["neurogate", "api", "overlay", "usage", "windows", "macos", "playwright"]
+authors = [{ name = "Vibemod contributors" }]
+keywords = ["vibemode", "api", "overlay", "usage", "windows", "macos", "playwright"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: End Users/Desktop",
@@ -30,10 +30,11 @@ dependencies = [
 macos = ["pyobjc-framework-Cocoa>=10.0", "pyobjc-framework-WebKit>=10.0"]
 
 [project.urls]
-Homepage = "https://github.com/RyandavisProject/neurogate-overlay"
-Issues = "https://github.com/RyandavisProject/neurogate-overlay/issues"
+Homepage = "https://github.com/RyandavisProject/vibemod"
+Issues = "https://github.com/RyandavisProject/vibemod/issues"
 
 [project.scripts]
+vibemod = "neurogate_usage_overlay.__main__:main"
 neurogate-overlay = "neurogate_usage_overlay.__main__:main"
 neurogate-api = "neurogate_usage_overlay.__main__:main"
 vibemode-overlay = "neurogate_usage_overlay.__main__:main"

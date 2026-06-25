@@ -1,6 +1,6 @@
 ﻿# Architecture
 
-NeuroGate API is intentionally small and local-first. It has four main
+Vibemod is intentionally small and local-first. It has four main
 runtime layers.
 
 ## Runtime Flow
@@ -12,12 +12,14 @@ run-overlay.ps1
       -> Playwright persistent Chrome profile
       -> hidden browser by default
       -> visible browser only when login is required
-      -> NeuroGate usage page
-      -> visible body text
-    -> parse_usage_text()
+      -> VibeMode cabinet
+      -> VibeMode cabinet API
+      -> visible body text fallback
+    -> VibeMode API adapter / parse_usage_text()
       -> UsageSnapshot / UsageWindow
-    -> UsageOverlay
-      -> Tkinter always-on-top widget
+    -> UsageOverlay / MenuBarOverlay
+      -> Windows Tkinter always-on-top widget
+      -> macOS menu bar NSPopover
 ```
 
 ## Components
@@ -42,7 +44,10 @@ run-overlay.ps1
 - hides the visible Chrome window after a successful read and continues from the
   same local browser session;
 - exposes a runtime `keep_browser_open` toggle for the overlay menu;
-- waits for the dynamic usage page to expose both limit cards;
+- reads `https://api.vibemod.pro/client/profile` and
+  `https://api.vibemod.pro/client/usage/limits` from the local VibeMode session;
+- falls back to visible dashboard text if API reads fail;
+- waits for the dynamic cabinet to expose both limit cards;
 - reports login or missing-data states directly instead of showing old saved
   values;
 - writes local debug logs only.
@@ -51,16 +56,17 @@ run-overlay.ps1
 
 `src/neurogate_usage_overlay/parser.py`
 
-- parses visible page text, not private APIs;
+- parses visible page text as a fallback;
 - supports the old `24 часа / 7 дней` layout;
-- supports the current `5 часов / 7 дней` credit-balance layout;
+- supports the current VibeMode `5 часов / 7 дней` credit-balance layout;
 - avoids parsing the paid-reset card as a limit card.
 
 ### Overlay UI
 
 `src/neurogate_usage_overlay/overlay.py`
 
-- draws a compact borderless Tkinter widget;
+- draws a compact borderless Tkinter widget on Windows;
+- runs a native menu-bar popover on macOS;
 - keeps refresh rate at one minute or slower;
 - is draggable from any area;
 - uses a custom borderless menu instead of the native Windows menu;
@@ -77,8 +83,8 @@ the user's own machine.
 
 - Tkinter keeps installation simple, but styling is lower-level than a full UI
   framework.
-- Text parsing is robust enough for the visible page but still depends on page
-  labels.
+- The VibeMode API adapter is preferred, while text parsing still depends on
+  visible page labels when used as fallback.
 - Playwright gives reliable browser automation, but it means the first install
   is heavier than a pure HTTP client.
 - Hidden mode improves desktop privacy, but it still relies on local browser
