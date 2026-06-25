@@ -1,6 +1,6 @@
 ﻿# Privacy
 
-Vibemod is designed to be local-first.
+Vibemode is designed to be local-first.
 
 ## What The App Reads
 
@@ -10,7 +10,7 @@ The app opens the local account page:
 https://portal.vibemod.pro/client
 ```
 
-For the current VibeMode cabinet, the app reads the values through the cabinet
+For the current Vibemode cabinet, the app reads the values through the cabinet
 API from the same local browser session:
 
 ```text
@@ -29,7 +29,7 @@ It parses only the values needed for the desktop overlay:
 
 The browser is hidden by default after login. If the saved browser session is
 expired, the app opens a visible Chrome window so the user can log in directly
-on the VibeMode website. After a successful read, that visible window
+on the Vibemode website. After a successful read, that visible window
 is hidden and later updates continue from the same local browser session.
 
 The user can temporarily keep the account page visible with the `Не закрывать ЛК`
@@ -37,9 +37,9 @@ menu toggle. Turning the toggle off hides the visible Chrome window and returns
 the app to hidden mode. This does not change the privacy boundary: the app still
 uses the local Chrome profile and does not collect credentials.
 
-The user can switch VibeMode accounts from the overlay menu with
+The user can switch Vibemode accounts from the overlay menu with
 `Сменить аккаунт`. This closes the current browser context, removes only the
-overlay's local browser profile, and opens a fresh VibeMode login window.
+overlay's local browser profile, and opens a fresh Vibemode login window.
 Automatic login clicks are blocked during this account-switch flow until the
 user successfully logs in to the new account. It does not touch the user's
 normal Chrome profile.
@@ -57,10 +57,10 @@ normal Chrome profile.
   the user starts it with `--show-browser` or enables `Не закрывать ЛК` in the
   overlay menu.
 - It may automatically press the login button only for normal session recovery,
-  when the VibeMode login form is already filled by the local browser and stays
+  when the Vibemode login form is already filled by the local browser and stays
   unchanged for several seconds. It does not store the password; it only checks
   whether the local form is filled. During `Сменить аккаунт`, automatic login is
-  disabled and the user confirms login manually on the VibeMode website.
+  disabled and the user confirms login manually on the Vibemode website.
 
 ## Local Files
 

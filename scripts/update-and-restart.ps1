@@ -127,10 +127,11 @@ function Copy-ReleaseTree($SourceDir, $TargetDir) {
         "LICENSE",
         "SECURITY.md",
         "pyproject.toml",
-        "Install-Vibemod.bat"
+        "Install-Vibemode.bat",
+        "Install-Vibemod.bat",
         "Install-NeuroGate-API.bat"
     )
-    $BackupDir = Join-Path ([System.IO.Path]::GetTempPath()) "vibemod-backup-$([System.Guid]::NewGuid())"
+    $BackupDir = Join-Path ([System.IO.Path]::GetTempPath()) "vibemode-backup-$([System.Guid]::NewGuid())"
     $TouchedItems = New-Object System.Collections.Generic.List[string]
 
     try {
@@ -189,15 +190,19 @@ function Update-FromZipRelease {
         $VersionTag = "v$VersionTag"
     }
 
-    $TempRoot = Join-Path ([System.IO.Path]::GetTempPath()) "vibemod-update-$([System.Guid]::NewGuid())"
+    $TempRoot = Join-Path ([System.IO.Path]::GetTempPath()) "vibemode-update-$([System.Guid]::NewGuid())"
     $ZipPath = Join-Path $TempRoot "release.zip"
     $ExtractPath = Join-Path $TempRoot "extract"
     $ArchiveUrl = if ($ReleaseZipUrl) {
         $ReleaseZipUrl
+    } elseif ($env:VIBEMODE_UPDATE_ZIP_URL) {
+        $env:VIBEMODE_UPDATE_ZIP_URL
     } elseif ($env:NEUROGATE_UPDATE_ZIP_URL) {
         $env:NEUROGATE_UPDATE_ZIP_URL
+    } elseif ($env:VIBEMOD_UPDATE_ZIP_URL) {
+        $env:VIBEMOD_UPDATE_ZIP_URL
     } else {
-        "https://github.com/RyandavisProject/vibemod/archive/refs/tags/$VersionTag.zip"
+        "https://github.com/RyandavisProject/vibemode/archive/refs/tags/$VersionTag.zip"
     }
 
     try {
@@ -228,7 +233,7 @@ function Update-FromZipRelease {
 
 Push-Location $Root
 try {
-    Write-Host "Updating Vibemod overlay..."
+    Write-Host "Updating Vibemode overlay..."
     if ($TargetVersion) {
         Write-Host "Target version: $TargetVersion"
     }

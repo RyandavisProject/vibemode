@@ -34,5 +34,5 @@ if (-not $NoShortcut) {
 }
 
 Write-Host ""
-Write-Host "Installed Vibemod."
+Write-Host "Installed Vibemode."
 Write-Host "Run: .\scripts\run-overlay.ps1"

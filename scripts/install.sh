@@ -36,5 +36,5 @@ if [[ "$NO_SHORTCUT" -eq 0 ]]; then
 fi
 
 echo ""
-echo "Installed Vibemod."
+echo "Installed Vibemode."
 echo "Run: ./scripts/run-overlay.sh"

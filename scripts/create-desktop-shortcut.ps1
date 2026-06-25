@@ -1,5 +1,5 @@
 param(
-    [string]$ShortcutName = "Vibemod",
+    [string]$ShortcutName = "Vibemode",
     [string]$DesktopDir = ""
 )
 
@@ -11,8 +11,8 @@ $Desktop = if ($DesktopDir) { $DesktopDir } else { [Environment]::GetFolderPath(
 New-Item -ItemType Directory -Path $Desktop -Force | Out-Null
 $ShortcutPath = Join-Path $Desktop "$ShortcutName.lnk"
 
-if ($ShortcutName -eq "Vibemod") {
-    @("Vibemod.lnk", "Vibemode Overlay.lnk", "Neurogate Usage Overlay.lnk") |
+if ($ShortcutName -eq "Vibemode") {
+    @("Vibemode.lnk", "Vibemode Overlay.lnk", "Neurogate Usage Overlay.lnk") |
         ForEach-Object {
             $OldShortcutPath = Join-Path $Desktop $_
             if (Test-Path $OldShortcutPath) {
@@ -26,7 +26,7 @@ $Shortcut = $Shell.CreateShortcut($ShortcutPath)
 $Shortcut.TargetPath = "powershell.exe"
 $Shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$RunScript`""
 $Shortcut.WorkingDirectory = $Root
-$Shortcut.Description = "Start the Vibemod limits overlay"
+$Shortcut.Description = "Start the Vibemode limits overlay"
 $Shortcut.IconLocation = "$env:SystemRoot\System32\shell32.dll,167"
 $Shortcut.Save()
 

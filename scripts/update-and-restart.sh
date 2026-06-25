@@ -13,7 +13,7 @@ TARGET_VERSION=""
 NO_RESTART=0
 NO_SHORTCUT=0
 SHORTCUT_DIR=""
-RELEASE_ZIP_URL="${NEUROGATE_UPDATE_ZIP_URL:-}"
+RELEASE_ZIP_URL="${VIBEMODE_UPDATE_ZIP_URL:-${VIBEMOD_UPDATE_ZIP_URL:-${NEUROGATE_UPDATE_ZIP_URL:-}}}"
 RELEASE_SHA256="${NEUROGATE_UPDATE_SHA256:-}"
 
 while [[ $# -gt 0 ]]; do
@@ -64,7 +64,7 @@ assert_under_directory() {
 copy_release_tree() {
     local src_dir="$1"
     local target_dir="$2"
-    local allowed_items=("src" "scripts" "docs" "tests" "README.md" "CHANGELOG.md" "LICENSE" "SECURITY.md" "pyproject.toml" "Install-Vibemod.bat" "Install-NeuroGate-API.bat")
+    local allowed_items=("src" "scripts" "docs" "tests" "README.md" "CHANGELOG.md" "LICENSE" "SECURITY.md" "pyproject.toml" "Install-Vibemode.bat" "Install-Vibemod.bat" "Install-NeuroGate-API.bat")
     local backup_dir
     backup_dir="$(mktemp -d)"
     local touched=()
@@ -110,7 +110,7 @@ update_from_zip() {
     tmp_dir="$(mktemp -d)"
     local zip_path="$tmp_dir/release.zip"
     local extract_path="$tmp_dir/extract"
-    local archive_url="${RELEASE_ZIP_URL:-https://github.com/RyandavisProject/vibemod/archive/refs/tags/${version_tag}.zip}"
+    local archive_url="${RELEASE_ZIP_URL:-https://github.com/RyandavisProject/vibemode/archive/refs/tags/${version_tag}.zip}"
 
     trap 'rm -rf "$tmp_dir"' EXIT
 
@@ -138,7 +138,7 @@ update_from_zip() {
 # ── main ──────────────────────────────────────────────────────────────────────
 
 cd "$ROOT"
-echo "Updating Vibemod overlay..."
+echo "Updating Vibemode overlay..."
 [[ -n "$TARGET_VERSION" ]] && echo "Target version: $TARGET_VERSION"
 
 if [[ -d "$ROOT/.git" ]]; then

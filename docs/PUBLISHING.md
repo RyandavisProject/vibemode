@@ -31,7 +31,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1
 The ZIP is created in `dist/`, for example:
 
 ```text
-dist\vibemod-vX.Y.Z.zip
+dist\vibemode-vX.Y.Z.zip
 ```
 
 ## 3. Review Public Docs
@@ -49,7 +49,7 @@ Confirm these files are current:
 ```powershell
 git init
 git add .
-git commit -m "Prepare Vibemod for public release"
+git commit -m "Prepare Vibemode for public release"
 ```
 
 ## 5. Push To GitHub
@@ -57,7 +57,7 @@ git commit -m "Prepare Vibemod for public release"
 Create a new GitHub repository, then:
 
 ```powershell
-git remote add origin https://github.com/RyandavisProject/vibemod.git
+git remote add origin https://github.com/RyandavisProject/vibemode.git
 git branch -M main
 git push -u origin main
 ```
@@ -69,9 +69,9 @@ Tell users:
 1. Install Python and Chrome.
 2. Download the latest ZIP from GitHub Releases.
 3. Extract the ZIP.
-4. Run `Install-Vibemod.bat`.
-5. Use the created `Vibemod` desktop shortcut.
-6. Log in directly on the VibeMode website when Chrome opens.
+4. Run `Install-Vibemode.bat`.
+5. Use the created `Vibemode` desktop shortcut.
+6. Log in directly on the Vibemode website when Chrome opens.
 
 For AI-assisted or developer installs, users can also clone the repository and
 run:
@@ -85,7 +85,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 After pushing a version commit:
 
 1. Create a GitHub Release with tag `vX.Y.Z`.
-2. Use the release title `Vibemod vX.Y.Z`.
+2. Use the release title `Vibemode vX.Y.Z`.
 3. Attach the generated ZIP from `dist/`.
 4. Mention the main changes from `CHANGELOG.md`.
 
@@ -105,7 +105,7 @@ docs/AI_INSTALL_PROMPT.md
 Suggested user command:
 
 ```text
-Install Vibemod from this repository. Read docs/AI_INSTALL_PROMPT.md
+Install Vibemode from this repository. Read docs/AI_INSTALL_PROMPT.md
 and follow it exactly.
 ```
 

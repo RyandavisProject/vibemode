@@ -179,7 +179,7 @@ class UsageOverlay:
         self.position_after_id: str | None = None
 
         self.root = tk.Tk()
-        self.root.title(f"Vibemod {__version__}")
+        self.root.title(f"Vibemode {__version__}")
         self.root.geometry(self._initial_geometry())
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
@@ -1319,7 +1319,7 @@ class UsageOverlay:
             )
             return
 
-        account = snapshot.account if snapshot and snapshot.account else "Vibemod"
+        account = snapshot.account if snapshot and snapshot.account else "Vibemode"
         plan_status = compact_plan_status(snapshot.plan_status if snapshot else None)
         plan_text = plan_status or self.status_text
         account_x = 12
@@ -1393,7 +1393,7 @@ class UsageOverlay:
         self.status_text = "ошибка"
         self._write_ui_log(f"error {error!r}")
         self._render()
-        print(f"Vibemod overlay error: {error}")
+        print(f"Vibemode overlay error: {error}")
 
     def _write_ui_log(self, message: str) -> None:
         try:
@@ -1496,7 +1496,7 @@ if sys.platform == "darwin":
                 pass
 
     class MenuBarOverlay:
-        """macOS menu bar status item showing Vibemod usage.
+        """macOS menu bar status item showing Vibemode usage.
 
         Displays a compact title (e.g. "NG 82.3M") in the menu bar; clicking it
         reveals a dropdown with per-window limits, settings, and actions.

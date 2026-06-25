@@ -35,7 +35,7 @@ def _remove_pid_file(path: Path) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Vibemod usage overlay.")
+    parser = argparse.ArgumentParser(description="Vibemode usage overlay.")
     parser.add_argument("--url", default=USAGE_URL, help="Usage page URL.")
     parser.add_argument("--interval", type=int, default=60, help="Refresh interval in seconds.")
     parser.add_argument(
@@ -66,7 +66,7 @@ def main() -> int:
     state_dir = args.profile_dir.parent
     lock = SingleInstanceLock(state_dir / "overlay.lock")
     if not lock.acquire():
-        print("Vibemod overlay is already running.")
+        print("Vibemode overlay is already running.")
         return 0
     pid_file = state_dir / "overlay.pid"
     _write_pid_file(pid_file)

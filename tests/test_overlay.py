@@ -745,7 +745,7 @@ class OverlayUpdateTest(unittest.TestCase):
         info = UpdateInfo(
             current_version="2.0",
             latest_version="2.1.0",
-            release_url="https://github.com/RyandavisProject/vibemod/releases/tag/v2.1.0",
+            release_url="https://github.com/RyandavisProject/vibemode/releases/tag/v2.1.0",
         )
 
         self.assertEqual(version_menu_label("2.0", info), "v.2.0 (доступна v.2.1)")
@@ -759,7 +759,7 @@ class OverlayUpdateTest(unittest.TestCase):
         overlay.update_info = UpdateInfo(
             current_version="2.0",
             latest_version="2.1.0",
-            release_url="https://github.com/RyandavisProject/vibemod/releases/tag/v2.1.0",
+            release_url="https://github.com/RyandavisProject/vibemode/releases/tag/v2.1.0",
         )
 
         command = overlay._version_menu_command()

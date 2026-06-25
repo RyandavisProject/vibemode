@@ -9,7 +9,7 @@ from urllib.request import Request, urlopen
 from . import __version__
 
 
-DEFAULT_RELEASE_API_URL = "https://api.github.com/repos/RyandavisProject/vibemod/releases/latest"
+DEFAULT_RELEASE_API_URL = "https://api.github.com/repos/RyandavisProject/vibemode/releases/latest"
 
 
 @dataclass(frozen=True)
@@ -26,7 +26,11 @@ class UpdateInfo:
 
 
 def latest_release_api_url() -> str:
-    return os.environ.get("VIBEMOD_UPDATE_API_URL") or os.environ.get("NEUROGATE_UPDATE_API_URL", DEFAULT_RELEASE_API_URL)
+    return (
+        os.environ.get("VIBEMODE_UPDATE_API_URL")
+        or os.environ.get("VIBEMOD_UPDATE_API_URL")
+        or os.environ.get("NEUROGATE_UPDATE_API_URL", DEFAULT_RELEASE_API_URL)
+    )
 
 
 def normalize_version(value: str) -> str:
@@ -68,9 +72,9 @@ def _release_asset_info(payload: dict[str, object]) -> tuple[str | None, str | N
         url = str(item.get("browser_download_url") or "")
         if not url or not name.endswith(".zip"):
             continue
-        if zip_asset is None or "vibemod" in name or "neurogate-overlay" in name:
+        if zip_asset is None or "vibemode" in name or "vibemod" in name or "neurogate-overlay" in name:
             zip_asset = item
-        if "vibemod" in name:
+        if "vibemode" in name:
             break
 
     if not zip_asset:
@@ -90,7 +94,7 @@ def check_for_update(
         api_url or latest_release_api_url(),
         headers={
             "Accept": "application/vnd.github+json",
-            "User-Agent": f"vibemod/{current_version}",
+            "User-Agent": f"vibemode/{current_version}",
         },
     )
     try:

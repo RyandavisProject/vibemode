@@ -1,8 +1,8 @@
-# Vibemod 2.0
+# Vibemode 2.0
 
-Небольшой оверлей для лимитов VibeMode API. Работает на **Windows** и **macOS**.
+Небольшой оверлей для лимитов Vibemode API. Работает на **Windows** и **macOS**.
 
-English note: this is a compact overlay for VibeMode API usage limits, supporting Windows and macOS.
+English note: this is a compact overlay for Vibemode API usage limits, supporting Windows and macOS.
 The main documentation is in Russian because the primary users are Russian-speaking.
 
 На **Windows** оверлей отображается как маленькое окно поверх рабочего стола.
@@ -32,7 +32,7 @@ The main documentation is in Russian because the primary users are Russian-speak
 
 - название тарифа и время до окончания подписки;
 - остатки кредитов за **5 часов** и **7 дней**;
-- прогресс-бары по данным VibeMode API;
+- прогресс-бары по данным Vibemode API;
 - время до сброса каждого лимита;
 - *(Windows)* подсказку при наведении на остаток `5ч` — сколько потрачено со сброса;
 - *(Windows)* подсказку при наведении на остаток `7д` — сколько потрачено сегодня;
@@ -44,7 +44,7 @@ The main documentation is in Russian because the primary users are Russian-speak
 
 Проект работает локально на твоём компьютере.
 
-- Оверлей не просит пароль VibeMode в своём интерфейсе.
+- Оверлей не просит пароль Vibemode в своём интерфейсе.
 - Оверлей не собирает API-ключи.
 - Оверлей не отправляет лимиты, cookies или данные аккаунта в этот проект,
   на отдельный сервер или в аналитику.
@@ -52,7 +52,7 @@ The main documentation is in Russian because the primary users are Russian-speak
 - Cookies остаются на компьютере в локальном профиле Playwright/Chrome.
 - После успешного входа видимое окно Chrome скрывается.
 - Если нужно войти в другой аккаунт — пункт `Сменить аккаунт` удаляет
-  локальный профиль оверлея и открывает чистое окно входа VibeMode.
+  локальный профиль оверлея и открывает чистое окно входа Vibemode.
 
 Основные локальные файлы:
 
@@ -72,13 +72,13 @@ The main documentation is in Russian because the primary users are Russian-speak
 - Windows 10/11
 - Python 3.10+
 - Google Chrome
-- доступ к сайту VibeMode
+- доступ к сайту Vibemode
 
 ### macOS
 
 - macOS 13 Ventura или новее
 - Python 3.10+ (рекомендуется через [Homebrew](https://brew.sh): `brew install python`)
-- доступ к сайту VibeMode
+- доступ к сайту Vibemode
 
 > На macOS используется встроенный WebKit (WKWebView) через PyObjC — дополнительный
 > браузер не нужен. При первом запуске Playwright скачает Chromium автоматически.
@@ -90,32 +90,32 @@ The main documentation is in Russian because the primary users are Russian-speak
 Этот способ подходит пользователю без Codex, Claude Code и Git.
 
 1. Открой GitHub-страницу проекта:
-   `https://github.com/RyandavisProject/vibemod`
+   `https://github.com/RyandavisProject/vibemode`
 2. Скачай ZIP-архив последней версии из раздела Releases.
 3. Распакуй архив в обычную папку, например:
-   `C:\Vibemod`
+   `C:\Vibemode`
 4. Дважды нажми файл:
 
 ```text
-Install-Vibemod.bat
+Install-Vibemode.bat
 ```
 
 Установщик создаст локальное Python-окружение, поставит зависимости и добавит
-ярлык `Vibemod` на рабочий стол.
+ярлык `Vibemode` на рабочий стол.
 
 ### Windows — Вариант 2: установка через Codex, Claude Code или Git
 
 ```powershell
-git clone https://github.com/RyandavisProject/vibemod.git
-cd vibemod
+git clone https://github.com/RyandavisProject/vibemode.git
+cd vibemode
 powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 ```
 
 ### macOS — установка
 
 ```bash
-git clone https://github.com/RyandavisProject/vibemod.git
-cd vibemod
+git clone https://github.com/RyandavisProject/vibemode.git
+cd vibemode
 bash scripts/install.sh
 ```
 
@@ -128,13 +128,13 @@ bash scripts/install.sh
 Установщик:
 - создаёт локальное Python-окружение в `.venv/`;
 - ставит зависимости включая PyObjC для нативного UI;
-- создаёт `.app`-ярлык `Vibemod.app` в `~/Applications` (виден в Spotlight и Launchpad).
+- создаёт `.app`-ярлык `Vibemode.app` в `~/Applications` (виден в Spotlight и Launchpad).
 
 ## Запуск
 
 ### Windows
 
-Через ярлык `Vibemod` на рабочем столе или через PowerShell:
+Через ярлык `Vibemode` на рабочем столе или через PowerShell:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\run-overlay.ps1
@@ -142,7 +142,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-overlay.ps1
 
 ### macOS
 
-Открой `Vibemod.app` из `~/Applications` через Finder, Spotlight или Launchpad.
+Открой `Vibemode.app` из `~/Applications` через Finder, Spotlight или Launchpad.
 
 Или из терминала:
 
@@ -154,7 +154,7 @@ bash scripts/run-overlay.sh
 
 1. Оверлей пытается прочитать страницу лимитов в скрытом режиме.
 2. Если нужен вход, откроется отдельное окно Chromium с локальным профилем.
-3. Войди на сайте VibeMode обычным способом.
+3. Войди на сайте Vibemode обычным способом.
 4. После успешного входа окно Chromium скроется.
 5. В menu bar появится иконка `NG 12.0M` (или актуальный остаток).
 6. Дальше обновления идут автоматически раз в 1 минуту (по умолчанию).
@@ -194,7 +194,7 @@ bash scripts/run-overlay.sh
 - Наведение на оранжевую цифру `5ч` показывает `Потрачено со сброса`.
 - Наведение на оранжевую цифру `7д` показывает `сегодня потрачено`.
 - Правый клик открывает компактное меню.
-- Пункт `Не закрывать ЛК` держит страницу VibeMode открытой отдельным окном.
+- Пункт `Не закрывать ЛК` держит страницу Vibemode открытой отдельным окном.
 - Пункт `2x размер` включает увеличенный интерфейс.
 - Пункт `лимит/день` — задать дневной лимит расхода кредитов.
 - Строка версии показывает `v.2.0 (последняя)` или `v.2.0 (доступна v.2.1)`.
@@ -256,7 +256,7 @@ bash scripts/check.sh
 ## Команда для Codex или Claude Code
 
 ```text
-Установи Vibemod с https://github.com/RyandavisProject/vibemod
+Установи Vibemode с https://github.com/RyandavisProject/vibemode
 ```
 
 Подробный промпт лежит здесь: `docs/AI_INSTALL_PROMPT.md`
@@ -264,8 +264,8 @@ bash scripts/check.sh
 ## Структура проекта
 
 ```text
-vibemod/
-  Install-Vibemod.bat
+vibemode/
+  Install-Vibemode.bat
   src/neurogate_usage_overlay/
     __main__.py           точка входа CLI
     browser_reader.py     чтение страницы через Playwright/Chrome
@@ -299,6 +299,7 @@ vibemod/
 - Лимиты читаются через API `api.vibemod.pro` из той же локальной браузерной сессии.
 - Остатки 5ч и 7д считаются как `лимит - потрачено`.
 - Исправлена рассинхронизация версии после v1.8: код, пакет и UI используют одну версию.
+- Публичное название исправлено на **Vibemode**, включая GitHub, установщики и документацию.
 - Правки применяются к общей базе чтения данных, поэтому работают и в Windows-оверлее, и в macOS menu bar.
 
 ### 1.8.0 — 16-06-2026
@@ -335,7 +336,7 @@ vibemod/
 
 - Добавлен режим `лимит/день` на Windows.
 - Цвет дневного прогресса предупреждает о перерасходе.
-- UI не подвисает во время чтения Vibemod.
+- UI не подвисает во время чтения Vibemode.
 - Watchdog после сна Windows.
 
 ### 1.6.0 — 13-06-2026

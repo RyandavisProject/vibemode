@@ -1,6 +1,6 @@
 ﻿# Architecture
 
-Vibemod is intentionally small and local-first. It has four main
+Vibemode is intentionally small and local-first. It has four main
 runtime layers.
 
 ## Runtime Flow
@@ -12,10 +12,10 @@ run-overlay.ps1
       -> Playwright persistent Chrome profile
       -> hidden browser by default
       -> visible browser only when login is required
-      -> VibeMode cabinet
-      -> VibeMode cabinet API
+      -> Vibemode cabinet
+      -> Vibemode cabinet API
       -> visible body text fallback
-    -> VibeMode API adapter / parse_usage_text()
+    -> Vibemode API adapter / parse_usage_text()
       -> UsageSnapshot / UsageWindow
     -> UsageOverlay / MenuBarOverlay
       -> Windows Tkinter always-on-top widget
@@ -45,7 +45,7 @@ run-overlay.ps1
   same local browser session;
 - exposes a runtime `keep_browser_open` toggle for the overlay menu;
 - reads `https://api.vibemod.pro/client/profile` and
-  `https://api.vibemod.pro/client/usage/limits` from the local VibeMode session;
+  `https://api.vibemod.pro/client/usage/limits` from the local Vibemode session;
 - falls back to visible dashboard text if API reads fail;
 - waits for the dynamic cabinet to expose both limit cards;
 - reports login or missing-data states directly instead of showing old saved
@@ -58,7 +58,7 @@ run-overlay.ps1
 
 - parses visible page text as a fallback;
 - supports the old `24 часа / 7 дней` layout;
-- supports the current VibeMode `5 часов / 7 дней` credit-balance layout;
+- supports the current Vibemode `5 часов / 7 дней` credit-balance layout;
 - avoids parsing the paid-reset card as a limit card.
 
 ### Overlay UI
@@ -83,7 +83,7 @@ the user's own machine.
 
 - Tkinter keeps installation simple, but styling is lower-level than a full UI
   framework.
-- The VibeMode API adapter is preferred, while text parsing still depends on
+- The Vibemode API adapter is preferred, while text parsing still depends on
   visible page labels when used as fallback.
 - Playwright gives reliable browser automation, but it means the first install
   is heavier than a pure HTTP client.

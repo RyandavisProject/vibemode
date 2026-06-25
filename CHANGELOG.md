@@ -6,11 +6,11 @@
 
 ### Добавлено
 
-- Поддержан новый кабинет VibeMode: `https://portal.vibemod.pro/client`.
+- Поддержан новый кабинет Vibemode: `https://portal.vibemod.pro/client`.
 - Добавлено чтение лимитов через API кабинета:
   - `https://api.vibemod.pro/client/profile`
   - `https://api.vibemod.pro/client/usage/limits`
-- Добавлен fallback-парсер видимого текста нового дашборда VibeMode.
+- Добавлен fallback-парсер видимого текста нового дашборда Vibemode.
 - Добавлены тесты на новый API-формат, новый текстовый формат кабинета и UTF-8 рендер macOS-попапа.
 
 ### Изменено
@@ -19,7 +19,8 @@
   - 5 часов: `creditLimit5Hours - credits5Hours`
   - 7 дней: `creditLimit7Days - credits7Days`
 - Версия синхронизирована между `pyproject.toml`, `__init__.py` и заголовком Windows-оверлея.
-- README, privacy, security, publishing и architecture docs обновлены под VibeMode.
+- README, privacy, security, publishing и architecture docs обновлены под Vibemode.
+- Публичное название проекта исправлено на `Vibemode`; старые `vibemod`-алиасы оставлены для совместимости.
 - macOS menu bar версия использует ту же общую логику чтения данных, что и Windows-оверлей.
 
 ### Исправлено
@@ -30,8 +31,8 @@
 
 ### Проверки
 
-- `scripts/check.ps1`: `114 tests OK`.
-- `scripts/run-once.ps1`: успешно прочитал новый кабинет VibeMode.
+- `scripts/check.ps1`: `120 tests OK`.
+- `scripts/run-once.ps1`: успешно прочитал новый кабинет Vibemode.
 
 ## 1.8.0 — 16-06-2026
 
@@ -132,7 +133,7 @@
 - Проверка новых версий через GitHub Releases при запуске и раз в сутки.
 - Пункт меню обновления версии.
 - Скрипт `scripts/update-and-restart.ps1` для Git- и ZIP-обновлений.
-- Корневой установщик `Install-Vibemod.bat` для ZIP-установки без Codex, Claude Code и Git.
+- Корневой установщик `Install-Vibemode.bat` для ZIP-установки без Codex, Claude Code и Git.
 - Скрипт `scripts/package-release.ps1` для сборки ZIP-архива под GitHub Releases.
 
 ### Изменено

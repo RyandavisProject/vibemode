@@ -5,7 +5,7 @@ set -euo pipefail
 
 SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(dirname "$SCRIPTS_DIR")"
-SHORTCUT_NAME="Vibemod"
+SHORTCUT_NAME="Vibemode"
 SHORTCUT_DIR=""
 
 while [[ $# -gt 0 ]]; do
@@ -40,7 +40,7 @@ cat > "$APP_PATH/Contents/Info.plist" <<EOF
     <key>CFBundleExecutable</key>
     <string>launch</string>
     <key>CFBundleIdentifier</key>
-    <string>pro.vibemod.overlay</string>
+    <string>pro.vibemode.overlay</string>
     <key>CFBundleName</key>
     <string>${SHORTCUT_NAME}</string>
     <key>CFBundleDisplayName</key>
@@ -73,4 +73,4 @@ chmod +x "$MACOS_DIR/launch"
     -f "$APP_PATH" 2>/dev/null || true
 
 echo "App shortcut created: $APP_PATH"
-echo "Open ~/Applications in Finder or search 'Vibemod' in Spotlight to launch."
+echo "Open ~/Applications in Finder or search 'Vibemode' in Spotlight to launch."

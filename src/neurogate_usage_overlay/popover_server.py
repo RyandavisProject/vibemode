@@ -164,7 +164,7 @@ function render() {
 
   if (snap && snap.has_data) {
     html += `<div class="header">
-      <span class="account">${snap.account || "VibeMode"}</span>
+      <span class="account">${snap.account || "Vibemode"}</span>
       ${snap.plan_status ? `<span class="plan">${snap.plan_status}</span>` : ""}
     </div>`;
     if (snap.updated_at) {

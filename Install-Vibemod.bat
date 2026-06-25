@@ -14,6 +14,6 @@ if errorlevel 1 (
 )
 
 echo.
-echo Vibemod installed.
-echo Desktop shortcut: Vibemod
+echo Vibemode installed.
+echo Desktop shortcut: Vibemode
 if not defined NEUROGATE_INSTALL_NO_PAUSE pause
