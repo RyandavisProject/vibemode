@@ -417,12 +417,12 @@ class OverlayProgressTest(unittest.TestCase):
     def test_daily_progress_color_warns_after_half_and_red_after_limit(self):
         overlay = UsageOverlay.__new__(UsageOverlay)
 
-        self.assertEqual(overlay._daily_progress_color(49), "#76a8ff")
-        self.assertEqual(overlay._daily_progress_color(50), "#76a8ff")
-        self.assertEqual(overlay._daily_progress_color(53), "#ffcb5d")
-        self.assertEqual(overlay._daily_progress_color(75), "#ff9f1c")
-        self.assertEqual(overlay._daily_progress_color(90), "#ff6e43")
-        self.assertEqual(overlay._daily_progress_color(100), "#ff4d5d")
+        self.assertEqual(overlay._daily_progress_color(49), "#34c759")
+        self.assertEqual(overlay._daily_progress_color(50), "#34c759")
+        self.assertEqual(overlay._daily_progress_color(53), "#ffcc00")
+        self.assertEqual(overlay._daily_progress_color(75), "#ffcc00")
+        self.assertEqual(overlay._daily_progress_color(76), "#ff3b30")
+        self.assertEqual(overlay._daily_progress_color(100), "#ff3b30")
 
     def test_window_progress_prefers_site_percent(self):
         overlay = UsageOverlay.__new__(UsageOverlay)

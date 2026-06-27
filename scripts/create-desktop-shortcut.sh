@@ -58,11 +58,9 @@ cat > "$APP_PATH/Contents/Info.plist" <<EOF
 EOF
 
 # Write the launcher script.
-# ROOT is resolved at launch time so the bundle survives being moved or renamed.
-cat > "$MACOS_DIR/launch" <<'LAUNCH'
+# ROOT is captured at install time so the bundle can live in ~/Applications.
+cat > "$MACOS_DIR/launch" <<LAUNCH
 #!/usr/bin/env bash
-LAUNCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(dirname "$(dirname "$(dirname "$LAUNCH_DIR")")")"
 exec bash "$ROOT/scripts/run-overlay.sh"
 LAUNCH
 

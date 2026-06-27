@@ -5,12 +5,19 @@ The PopoverServer runs in a daemon thread and serves the HTML/data.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Callable
 
 import objc
 from AppKit import (
+    NSBezierPath,
+    NSColor,
+    NSFont,
+    NSForegroundColorAttributeName,
+    NSImageLeft,
     NSApplication,
     NSImage,
+    NSFontAttributeName,
     NSStatusBar,
     NSVariableStatusItemLength,
 )
@@ -19,12 +26,17 @@ from WebKit import WKWebView, WKWebViewConfiguration, WKUserScript, WKUserScript
 
 # Lazy import — only needed at runtime on macOS
 _AppKit = None
+_VM_BLOB_IMAGE: Any = None
 
 
 # ── JS bridge: intercepts window.__ng_action(name) calls ─────────────────────
 _BRIDGE_SCRIPT = """
-window.__ng_action = function(name) {
-    fetch('/action/' + name, {method: 'POST'}).catch(function(){});
+window.__ng_action = function(name, payload) {
+    fetch('/action/' + name, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload || {})
+    }).catch(function(){});
 };
 // Report content height to NSPopover after render
 function __ng_resize() {
@@ -38,7 +50,80 @@ document.addEventListener('DOMContentLoaded', function() {
 """
 
 POPOVER_WIDTH  = 300
-POPOVER_HEIGHT = 380
+POPOVER_HEIGHT = 560
+
+
+def _progress_color(percent: float | None) -> Any:
+    if percent is None:
+        return NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.78)
+    if percent > 75:
+        return NSColor.colorWithCalibratedRed_green_blue_alpha_(1.0, 0.23, 0.19, 1.0)
+    if percent > 50:
+        return NSColor.colorWithCalibratedRed_green_blue_alpha_(1.0, 0.8, 0.0, 1.0)
+    return NSColor.colorWithCalibratedRed_green_blue_alpha_(0.20, 0.78, 0.35, 1.0)
+
+
+def _draw_vm_blob(origin_x: float = 0.0) -> None:
+    from Foundation import NSMakeRect
+
+    global _VM_BLOB_IMAGE
+    if _VM_BLOB_IMAGE is None:
+        asset_path = Path(__file__).with_name("assets") / "vm-reference-blob.png"
+        _VM_BLOB_IMAGE = NSImage.alloc().initWithContentsOfFile_(str(asset_path))
+    if _VM_BLOB_IMAGE is not None:
+        _VM_BLOB_IMAGE.drawInRect_(NSMakeRect(origin_x, 0, 18, 18))
+
+
+def _draw_vm_text(origin_x: float = 0.0) -> None:
+    from Foundation import NSMakeRect
+
+    attrs = {
+        NSFontAttributeName: NSFont.boldSystemFontOfSize_(6.2),
+        NSForegroundColorAttributeName: NSColor.blackColor(),
+    }
+    text = NSString.stringWithString_("VM")
+    text_size = text.sizeWithAttributes_(attrs)
+    text.drawInRect_withAttributes_(
+        NSMakeRect(origin_x + (18 - text_size.width) / 2, (18 - text_size.height) / 2 - 1.0, text_size.width, text_size.height),
+        attrs,
+    )
+
+
+def _make_vm_badge_image(title: str = "", progress_percent: float | None = None) -> Any:
+    """Draw the menu bar status: VM badge, title, and title-width progress strip."""
+    from Foundation import NSMakeRect, NSMakeSize
+
+    title = title or ""
+    title_attrs = {
+        NSFontAttributeName: NSFont.boldSystemFontOfSize_(11.5),
+        NSForegroundColorAttributeName: NSColor.whiteColor(),
+    }
+    title_text = NSString.stringWithString_(title)
+    title_size = title_text.sizeWithAttributes_(title_attrs)
+    title_width = max(12.0, float(title_size.width))
+    text_x = 22.0
+    width = int(text_x + title_width + 2)
+    image = NSImage.alloc().initWithSize_(NSMakeSize(width, 18))
+    image.lockFocus()
+    try:
+        _draw_vm_blob()
+        _draw_vm_text()
+
+        title_text.drawInRect_withAttributes_(NSMakeRect(text_x, 6.4, title_width + 2.0, 12.0), title_attrs)
+
+        track_y = 0.8
+        track = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(text_x, track_y, title_width, 2.2), 1.1, 1.1)
+        NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.28).setFill()
+        track.fill()
+        if progress_percent is not None:
+            fill_width = max(1.0, min(title_width, title_width * max(0.0, min(100.0, progress_percent)) / 100.0))
+            fill = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(text_x, track_y, fill_width, 2.2), 1.1, 1.1)
+            _progress_color(progress_percent).setFill()
+            fill.fill()
+    finally:
+        image.unlockFocus()
+    image.setSize_(NSMakeSize(width, 18))
+    return image
 
 
 def _make_popover(url: str) -> Any:
@@ -102,7 +187,19 @@ class StatusItemDelegate(NSObject):  # type: ignore[misc]
         return self._status_item.button() if hasattr(self, "_status_item") else None
 
     def buttonClicked_(self, sender: Any) -> None:
-        if self._popover.isShown():
+        from AppKit import NSApp
+
+        event = NSApp.currentEvent()
+        click_count = event.clickCount() if event and hasattr(event, "clickCount") else 1
+        is_right_click = False
+        if event and hasattr(event, "type"):
+            try:
+                from AppKit import NSEventTypeRightMouseUp
+
+                is_right_click = event.type() == NSEventTypeRightMouseUp
+            except Exception:
+                is_right_click = False
+        if self._popover.isShown() and click_count < 2 and not is_right_click:
             self._popover.close()
             return
         # Reload so data is always fresh when opening
@@ -120,7 +217,7 @@ class StatusItemDelegate(NSObject):  # type: ignore[misc]
 class MenuBarPopover:
     """Manages the macOS status item, popover, and WebView lifecycle."""
 
-    def __init__(self, server_url: str, initial_title: str = "NG …") -> None:
+    def __init__(self, server_url: str, initial_title: str = "...") -> None:
         self._server_url = server_url
         self._initial_title = initial_title
         self._status_item: Any = None
@@ -137,7 +234,17 @@ class MenuBarPopover:
         self._status_item = bar.statusItemWithLength_(NSVariableStatusItemLength)
 
         btn = self._status_item.button()
-        btn.setTitle_(self._initial_title)
+        btn.setImage_(_make_vm_badge_image(self._initial_title))
+        btn.setImagePosition_(NSImageLeft)
+        if hasattr(btn, "setImageHugsTitle_"):
+            btn.setImageHugsTitle_(True)
+        try:
+            from AppKit import NSEventMaskLeftMouseUp, NSEventMaskRightMouseUp
+
+            btn.sendActionOn_(NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp)
+        except Exception:
+            pass
+        btn.setTitle_("")
 
         self._delegate = StatusItemDelegate.alloc().init()
         self._delegate._status_item = self._status_item
@@ -152,14 +259,24 @@ class MenuBarPopover:
     def set_title(self, title: str) -> None:
         """Update the status bar title. Safe to call from main thread."""
         if self._status_item:
-            self._status_item.button().setTitle_(title)
+            btn = self._status_item.button()
+            btn.setImage_(_make_vm_badge_image(title))
+            btn.setTitle_("")
+
+    def set_status(self, title: str, progress_percent: float | None = None) -> None:
+        """Update title and tiny status progress strip. Safe to call from main thread."""
+        if not self._status_item:
+            return
+        btn = self._status_item.button()
+        btn.setImage_(_make_vm_badge_image(title, progress_percent))
+        btn.setTitle_("")
 
     def resize_to_content(self, height: int) -> None:
         """Resize the popover to fit content. Must be called on the main thread."""
         if not self._popover:
             return
         from Foundation import NSMakeSize
-        clamped = max(200, min(height + 8, 600))
+        clamped = max(POPOVER_HEIGHT, min(height + 8, 760))
         self._popover.setContentSize_(NSMakeSize(POPOVER_WIDTH, clamped))
         if self._web_view:
             from Foundation import NSMakeRect

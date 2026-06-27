@@ -24,13 +24,39 @@ _TEMPLATE = """\
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
   body {
+    --bg: rgba(246,247,250,0.96);
+    --text: #1c1c1e;
+    --muted: #73737a;
+    --subtle: #8e8e93;
+    --card: rgba(255,255,255,0.72);
+    --card-strong: rgba(255,255,255,0.9);
+    --border: rgba(0,0,0,0.08);
+    --hover: rgba(0,0,0,0.06);
+    --field: rgba(255,255,255,0.9);
+    --field-border: rgba(0,0,0,0.14);
+    --accent: #0a84ff;
+    --danger: #ff3b30;
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
     font-size: 13px;
-    background: transparent;
-    color: #1c1c1e;
+    background: var(--bg);
+    color: var(--text);
     padding: 12px 14px 14px;
     width: 280px;
     -webkit-user-select: none;
+  }
+  body.theme-dark {
+    --bg: rgba(24,24,27,0.97);
+    --text: #f5f5f7;
+    --muted: #b7b7bd;
+    --subtle: #8d8d95;
+    --card: rgba(44,44,48,0.82);
+    --card-strong: rgba(55,55,60,0.92);
+    --border: rgba(255,255,255,0.12);
+    --hover: rgba(255,255,255,0.09);
+    --field: rgba(18,18,20,0.9);
+    --field-border: rgba(255,255,255,0.18);
+    --accent: #64d2ff;
+    --danger: #ff6961;
   }
 
   .header {
@@ -43,7 +69,7 @@ _TEMPLATE = """\
   .account {
     font-weight: 600;
     font-size: 14px;
-    color: #1c1c1e;
+    color: var(--text);
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -51,21 +77,22 @@ _TEMPLATE = """\
   }
   .plan {
     font-size: 11px;
-    color: #8e8e93;
+    color: var(--subtle);
     font-weight: 500;
     white-space: nowrap;
   }
   .updated {
     font-size: 11px;
-    color: #8e8e93;
+    color: var(--subtle);
     margin-bottom: 10px;
   }
 
   .windows { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
 
   .card {
-    background: rgba(255,255,255,0.55);
-    border-radius: 10px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
     padding: 9px 11px 8px;
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
@@ -82,7 +109,7 @@ _TEMPLATE = """\
 
   .bar-track {
     height: 6px;
-    background: rgba(0,0,0,0.08);
+    background: var(--border);
     border-radius: 3px;
     overflow: hidden;
     margin-bottom: 4px;
@@ -94,24 +121,23 @@ _TEMPLATE = """\
   }
   .bar-green { background: #34c759; }
   .bar-yellow { background: #ffcc00; }
-  .bar-orange { background: #ff9500; }
   .bar-red { background: #ff3b30; }
 
   .card-sub {
     font-size: 11px;
-    color: #8e8e93;
+    color: var(--subtle);
   }
 
   .status-row {
     text-align: center;
-    color: #8e8e93;
+    color: var(--subtle);
     padding: 8px 0 4px;
     font-size: 13px;
   }
 
   .divider {
     height: 1px;
-    background: rgba(0,0,0,0.08);
+    background: var(--border);
     margin: 8px 0;
   }
 
@@ -121,26 +147,106 @@ _TEMPLATE = """\
     display: flex;
     align-items: center;
     gap: 8px;
+    width: 100%;
     padding: 6px 4px;
     border-radius: 7px;
     cursor: pointer;
-    color: #1c1c1e;
+    color: var(--text);
+    background: transparent;
+    border: 0;
     text-decoration: none;
     font-size: 13px;
+    font-family: inherit;
+    text-align: left;
     transition: background 0.12s;
   }
-  .action-btn:hover { background: rgba(0,0,0,0.06); }
+  .action-btn:hover { background: var(--hover); }
   .action-btn .icon { width: 18px; text-align: center; font-size: 14px; opacity: 0.75; }
-  .action-btn.danger { color: #ff3b30; }
-  .action-btn.muted { color: #636366; }
+  .action-btn .label { flex: 1; min-width: 0; }
+  .action-btn .chevron { color: var(--subtle); font-size: 12px; }
+  .action-btn.danger { color: var(--danger); }
+  .action-btn.muted { color: var(--muted); }
   .action-btn.disabled { cursor: default; }
   .action-btn.disabled:hover { background: transparent; }
+  .choice-list {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 5px;
+    padding: 4px 0 7px 26px;
+  }
+  .choice-btn {
+    height: 25px;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
+  }
+  .choice-btn:hover { background: var(--hover); }
+  .choice-btn.active {
+    color: #fff;
+    border-color: var(--accent);
+    background: var(--accent);
+  }
+  .daily-card {
+    margin: 2px 0 6px;
+  }
+  .daily-form {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px;
+    margin: 2px 0 6px;
+  }
+  .daily-form-row {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .daily-input {
+    min-width: 0;
+    flex: 1;
+    height: 28px;
+    border-radius: 7px;
+    border: 1px solid var(--field-border);
+    background: var(--field);
+    color: var(--text);
+    font: 600 13px -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+    padding: 0 8px;
+    outline: none;
+  }
+  .daily-input:focus { border-color: var(--accent); }
+  .mini-btn {
+    height: 28px;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: var(--card-strong);
+    color: var(--text);
+    font: inherit;
+    padding: 0 9px;
+    cursor: pointer;
+  }
+  .mini-btn.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  .form-error {
+    min-height: 14px;
+    color: var(--danger);
+    font-size: 11px;
+    padding-top: 4px;
+  }
 </style>
 </head>
 <body>
 <div id="root"></div>
 <script>
-const data = %DATA%;
+let data = %DATA%;
+let intervalMenuOpen = false;
+let dailyEditorOpen = false;
+let dailyDraft = null;
 
 function shortNum(n) {
   if (n == null) return "—";
@@ -152,14 +258,14 @@ function shortNum(n) {
 
 function barClass(pct) {
   if (pct == null) return "bar-green";
-  if (pct >= 90) return "bar-red";
-  if (pct >= 75) return "bar-orange";
-  if (pct >= 50) return "bar-yellow";
+  if (pct > 75) return "bar-red";
+  if (pct > 50) return "bar-yellow";
   return "bar-green";
 }
 
 function render() {
   const snap = data.snapshot;
+  document.body.className = data.theme === "dark" ? "theme-dark" : "theme-light";
   let html = "";
 
   if (snap && snap.has_data) {
@@ -188,6 +294,7 @@ function render() {
       </div>`;
     }
     html += `</div>`;
+    html += dailyLimitBlock();
   } else {
     html += `<div class="status-row">${snap && snap.status_note ? snap.status_note : "Загрузка..."}</div>`;
   }
@@ -195,17 +302,28 @@ function render() {
   html += `<div class="divider"></div>`;
   html += `<div class="actions">`;
   html += action("↻", "Обновить", "window.__ng_action('refresh')");
-  html += action("⏱", "Интервал: " + data.interval_label, "window.__ng_action('open_interval')");
+  html += action("⏱", "Интервал обновления: " + data.interval_label, "toggleIntervalMenu(event)", false, "", "⌄", "toggleIntervalMenu(event)");
+  if (intervalMenuOpen) {
+    html += `<div class="choice-list">`;
+    for (const choice of data.interval_choices || []) {
+      const active = choice.minutes === data.interval_minutes ? " active" : "";
+      html += `<button class="choice-btn${active}" type="button" onclick="setIntervalChoice(${choice.minutes})">${choice.label}</button>`;
+    }
+    html += `</div>`;
+  }
 
-  if (data.daily_limit_enabled) {
-    html += action("−", "Скрыть лимит в день", "window.__ng_action('hide_daily')");
+  if (!data.daily_limit_enabled) {
+    html += action("+", "Задать лимит на день", "openDailyEditor()");
   } else {
-    html += action("+", "Задать лимит на день", "window.__ng_action('set_daily')");
+    html += action("✎", "Изменить лимит на день", "openDailyEditor()");
+    html += action("−", "Скрыть лимит на день", "window.__ng_action('hide_daily')");
   }
 
   if (data.has_keep_toggle) {
-    html += action(data.keep_browser_open ? "✓" : "□", "Не закрывать ЛК", "window.__ng_action('toggle_keep')");
+    html += action(data.keep_browser_open ? "◉" : "○", data.keep_browser_open ? "Закрывать ЛК" : "Показывать ЛК", "toggleKeepBrowser()");
   }
+
+  html += action(data.theme === "dark" ? "☀" : "☾", data.theme === "dark" ? "Светлая тема" : "Тёмная тема", "toggleTheme()");
 
   if (data.has_account_reset) {
     html += `<div class="divider"></div>`;
@@ -218,27 +336,129 @@ function render() {
   }
 
   html += `<div class="divider"></div>`;
-  html += action("×", "Закрыть", "window.__ng_action('quit')", true);
+  html += action("↻", "Перезапустить", "window.__ng_action('restart')");
+  html += action("⏻", "Выход", "window.__ng_action('quit')", true);
   html += `</div>`;
 
   document.getElementById("root").innerHTML = html;
 }
 
-function action(icon, label, onclick, danger=false, extraClass="") {
+function dailyLimitBlock() {
+  if (dailyEditorOpen) {
+    return dailyForm();
+  }
+  if (data.daily_limit_enabled && data.daily_limit) {
+    const d = data.daily_limit;
+    const pct = d.percent != null ? Math.min(100, d.percent).toFixed(1) : 0;
+    const pctLabel = d.percent != null ? Math.round(d.percent) + "%" : "";
+    return `<div class="card daily-card" ondblclick="openDailyEditor()">
+      <div class="card-row">
+        <span class="card-title">Лимит/день</span>
+        <span class="card-pct">${pctLabel}</span>
+      </div>
+      <div class="bar-track"><div class="bar-fill ${barClass(d.percent)}" style="width:${pct}%"></div></div>
+      <div class="card-sub">${d.spent_label} / ${d.limit_label}</div>
+    </div>`;
+  }
+  return "";
+}
+
+function action(icon, label, onclick, danger=false, extraClass="", trailing="", contextmenu="") {
   const classes = ["action-btn"];
   if (danger) classes.push("danger");
   if (extraClass) classes.push(extraClass);
   const clickAttr = onclick ? ` onclick="${onclick}"` : "";
-  return `<a class="${classes.join(" ")}"${clickAttr}>
-    <span class="icon">${icon}</span><span>${label}</span>
-  </a>`;
+  const contextAttr = contextmenu ? ` oncontextmenu="${contextmenu}"` : "";
+  const trailingHtml = trailing ? `<span class="chevron">${trailing}</span>` : "";
+  return `<button type="button" class="${classes.join(" ")}"${clickAttr}${contextAttr}>
+    <span class="icon">${icon}</span><span class="label">${label}</span>${trailingHtml}
+  </button>`;
+}
+
+function toggleIntervalMenu(event) {
+  if (event) event.preventDefault();
+  intervalMenuOpen = !intervalMenuOpen;
+  dailyEditorOpen = false;
+  render();
+}
+
+function setIntervalChoice(minutes) {
+  intervalMenuOpen = false;
+  const choice = (data.interval_choices || []).find(item => item.minutes === minutes);
+  data.interval_minutes = minutes;
+  if (choice) data.interval_label = choice.menu_label || choice.label;
+  render();
+  window.__ng_action('set_interval', {minutes});
+}
+
+function toggleTheme() {
+  data.theme = data.theme === "dark" ? "light" : "dark";
+  render();
+  window.__ng_action('toggle_theme');
+}
+
+function toggleKeepBrowser() {
+  data.keep_browser_open = !data.keep_browser_open;
+  render();
+  window.__ng_action('toggle_keep');
+}
+
+function openDailyEditor() {
+  intervalMenuOpen = false;
+  dailyEditorOpen = true;
+  dailyDraft = data.daily_limit && data.daily_limit.limit_label ? data.daily_limit.limit_label : (data.daily_limit_default || "");
+  render();
+  setTimeout(() => {
+    const input = document.getElementById("dailyLimitInput");
+    if (input) { input.focus(); input.select(); }
+  }, 0);
+}
+
+function dailyForm() {
+  const value = dailyDraft != null ? dailyDraft : (data.daily_limit_default || "");
+  return `<div class="daily-form">
+    <div class="daily-form-row">
+      <input id="dailyLimitInput" class="daily-input" value="${escapeAttr(value)}" oninput="dailyDraft=this.value" onkeydown="dailyKey(event)" placeholder="56M">
+      <button type="button" class="mini-btn primary" onclick="saveDailyLimit()">OK</button>
+      <button type="button" class="mini-btn" onclick="dailyEditorOpen=false;render()">Отмена</button>
+    </div>
+    <div id="dailyError" class="form-error"></div>
+  </div>`;
+}
+
+function dailyKey(event) {
+  if (event.key === "Enter") saveDailyLimit();
+  if (event.key === "Escape") { dailyEditorOpen = false; render(); }
+}
+
+function saveDailyLimit() {
+  const input = document.getElementById("dailyLimitInput");
+  const value = input ? input.value.trim() : dailyDraft.trim();
+  if (!parseCreditInput(value)) {
+    const error = document.getElementById("dailyError");
+    if (error) error.textContent = "Введите число: 56M или 56000000";
+    return;
+  }
+  dailyEditorOpen = false;
+  window.__ng_action('set_daily', {value});
+}
+
+function parseCreditInput(value) {
+  const cleaned = String(value || "").trim().replace(",", ".").replace(/\\s+/g, "");
+  const match = cleaned.match(/^(\\d+(?:\\.\\d+)?)([kKmMbBкКмМ]?|млн|млрд|тыс|bn)$/);
+  if (!match) return null;
+  return Number(match[1]) > 0 ? match : null;
+}
+
+function escapeAttr(value) {
+  return String(value || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }
 
 render();
 
 setInterval(() => {
   fetch("/data").then(r => r.json()).then(d => {
-    Object.assign(data, d);
+    data = d;
     render();
   }).catch(() => {});
 }, 2000);
@@ -279,7 +499,7 @@ class _Handler(BaseHTTPRequestHandler):
         ps = self.server.popover
         if self.path.startswith("/action/"):
             action = self.path[len("/action/") :]
-            ps.handle_action(action)
+            ps.handle_action(action, self._read_json_body())
             self._respond(200, "text/plain", b"ok")
         elif self.path.startswith("/resize/"):
             try:
@@ -299,12 +519,25 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _read_json_body(self) -> dict[str, Any]:
+        try:
+            length = int(self.headers.get("Content-Length") or "0")
+        except ValueError:
+            length = 0
+        if length <= 0:
+            return {}
+        try:
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            return {}
+
 
 class PopoverServer:
     def __init__(self) -> None:
         self._snapshot: UsageSnapshot | None = None
         self._extra: dict[str, Any] = {}
-        self._action_callbacks: dict[str, Callable[..., None]] = {}
+        self._action_callbacks: dict[str, Callable[[dict[str, Any]], None]] = {}
         self._resize_callback: Callable[[int], None] | None = None
         self._server = _PopoverHTTPServer(("127.0.0.1", 0), _Handler)
         self._server.popover = self
@@ -323,16 +556,16 @@ class PopoverServer:
         self._snapshot = snapshot
         self._extra = extra
 
-    def on_action(self, name: str, callback: Callable[..., None]) -> None:
+    def on_action(self, name: str, callback: Callable[[dict[str, Any]], None]) -> None:
         self._action_callbacks[name] = callback
 
     def on_resize(self, callback: Callable[[int], None]) -> None:
         self._resize_callback = callback
 
-    def handle_action(self, name: str) -> None:
+    def handle_action(self, name: str, payload: dict[str, Any] | None = None) -> None:
         cb = self._action_callbacks.get(name)
         if cb:
-            threading.Thread(target=cb, daemon=True).start()
+            threading.Thread(target=lambda: cb(payload or {}), daemon=True).start()
 
     def handle_resize(self, height: int) -> None:
         cb = self._resize_callback

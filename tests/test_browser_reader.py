@@ -133,37 +133,40 @@ class BrowserReaderModeTest(unittest.TestCase):
 
         self.assertTrue(reader.keep_browser_open)
         self.assertFalse(reader.settings.hide_after_successful_login)
+        self.assertTrue(reader.settings.show_browser_on_login)
 
         reader.set_keep_browser_open(False)
 
         self.assertFalse(reader.keep_browser_open)
         self.assertTrue(reader.settings.hide_after_successful_login)
+        self.assertFalse(reader.settings.show_browser_on_login)
 
     def test_keep_browser_open_switches_running_context(self):
-        reader = NeurogateUsageReader(BrowserSettings(headless=True))
-        launches: list[bool] = []
-        hides = 0
-        reader._playwright = object()
-        reader._current_headless = True
-
-        def fake_launch_context(*, headless: bool) -> None:
-            launches.append(headless)
-            reader._current_headless = headless
-
-        def fake_hide_current_browser_window() -> int:
-            nonlocal hides
-            hides += 1
+        with tempfile.TemporaryDirectory() as tmpdir:
+            reader = NeurogateUsageReader(BrowserSettings(headless=True, profile_dir=Path(tmpdir)))
+            launches: list[bool] = []
+            hides = 0
+            reader._playwright = object()
             reader._current_headless = True
-            return 1
 
-        reader._launch_context = fake_launch_context  # type: ignore[method-assign]
-        reader._hide_current_browser_window = fake_hide_current_browser_window  # type: ignore[method-assign]
+            def fake_launch_context(*, headless: bool) -> None:
+                launches.append(headless)
+                reader._current_headless = headless
 
-        reader.set_keep_browser_open(True)
-        reader.set_keep_browser_open(False)
+            def fake_hide_current_browser_window() -> int:
+                nonlocal hides
+                hides += 1
+                reader._current_headless = None
+                return 1
 
-        self.assertEqual(launches, [False])
-        self.assertEqual(hides, 1)
+            reader._launch_context = fake_launch_context  # type: ignore[method-assign]
+            reader._hide_current_browser_window = fake_hide_current_browser_window  # type: ignore[method-assign]
+
+            reader.set_keep_browser_open(True)
+            reader.set_keep_browser_open(False)
+
+            self.assertEqual(launches, [False])
+            self.assertEqual(hides, 1)
 
     def test_visible_login_prompt_is_marked_as_opened(self):
         reader = NeurogateUsageReader(BrowserSettings(headless=True))
@@ -244,7 +247,10 @@ class BrowserReaderModeTest(unittest.TestCase):
         reader = NeurogateUsageReader(BrowserSettings())
         reader._profile_browser_process_ids_windows = lambda: {123, 456}  # type: ignore[method-assign]
 
-        with patch("neurogate_usage_overlay.browser_reader._hide_windows_for_pids", return_value=2) as hide:
+        with (
+            patch("neurogate_usage_overlay.browser_reader.sys.platform", "win32"),
+            patch("neurogate_usage_overlay.browser_reader._hide_windows_for_pids", return_value=2) as hide,
+        ):
             hidden_count = reader._hide_hidden_browser_taskbar_windows()
 
         hide.assert_called_once_with({123, 456})
@@ -617,6 +623,41 @@ class BrowserReaderModeTest(unittest.TestCase):
         self.assertTrue(submitted)
         self.assertEqual(clicks, 1)
         self.assertEqual(waits, AUTO_LOGIN_DELAY_ATTEMPTS + 1)
+
+    def test_hidden_prefilled_login_submits_without_visible_prompt(self):
+        reader = NeurogateUsageReader(BrowserSettings(headless=True))
+        reader._current_headless = True
+        reader._page = type("Page", (), {"url": reader.settings.usage_url, "wait_for_timeout": lambda _self, _timeout: None})()
+        texts = iter(["EMAIL\nПАРОЛЬ\nВойти", "ЛИМИТЫ ТАРИФА"])
+        opened_visible: list[bool] = []
+        clicks = 0
+
+        def click_login_submit() -> bool:
+            nonlocal clicks
+            clicks += 1
+            return True
+
+        reader._wait_for_usage_text = lambda: next(texts)  # type: ignore[method-assign]
+        reader._login_form_state = lambda: {  # type: ignore[method-assign]
+            "ready": True,
+            "email": "user@example.com",
+            "password": "__filled__",
+            "password_length": 8,
+        }
+        reader._click_login_submit = click_login_submit  # type: ignore[method-assign]
+        reader._open_visible_login_window = lambda: opened_visible.append(True)  # type: ignore[method-assign]
+        reader._read_vibemode_api_snapshot = lambda _text: UsageSnapshot(  # type: ignore[method-assign]
+            updated_at=datetime.now(),
+            windows=[UsageWindow(title="5 часов", credits_remaining=10)],
+        )
+        reader._hide_visible_browser_after_success = lambda: None  # type: ignore[method-assign]
+        reader._write_debug = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+
+        snapshot = reader.read()
+
+        self.assertEqual(clicks, 1)
+        self.assertEqual(opened_visible, [])
+        self.assertTrue(snapshot.has_data)
 
     def test_auto_login_is_blocked_during_account_switch(self):
         reader = NeurogateUsageReader(BrowserSettings(headless=True))

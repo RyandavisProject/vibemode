@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import json
 import re
+import shlex
 import subprocess
 import sys
 import threading
@@ -425,7 +426,7 @@ class UsageOverlay:
         keep_browser_open = self._keep_browser_open()
         keep_browser_label = "Не закрывать ЛК"
         scale_label = "2x размер"
-        daily_limit_label = "Скрыть лимит в день" if self._daily_limit_enabled() else "Задать лимит на день"
+        daily_limit_label = "Скрыть лимит на день" if self._daily_limit_enabled() else "Задать лимит на день"
         checkbox_labels = {keep_browser_label, scale_label}
         rows: list[tuple[str, Callable[[], None] | None, bool]] = [
             ("Обновить лимиты", lambda: self.refresh(force=True), False),
@@ -1131,7 +1132,7 @@ class UsageOverlay:
             return
         fill_width = min(width, max(0, int(width * max(0.0, min(1.0, percent / 100)))))
         if fill_width > 0:
-            self._rounded_rect(x, y, x + fill_width, y + 3, 2, "#76a8ff", tags=tags)
+            self._rounded_rect(x, y, x + fill_width, y + 3, 2, self._daily_progress_color(percent), tags=tags)
 
     @staticmethod
     def _mix_color(start: str, end: str, amount: float) -> str:
@@ -1143,12 +1144,10 @@ class UsageOverlay:
 
     def _daily_progress_color(self, percent: float) -> str:
         if percent <= 50:
-            return "#76a8ff"
-        if percent >= 100:
-            return "#ff4d5d"
+            return "#34c759"
         if percent <= 75:
-            return self._mix_color("#ffd166", "#ff9f1c", (percent - 50.0) / 25.0)
-        return self._mix_color("#ff9f1c", "#ff4d5d", (percent - 75.0) / 25.0)
+            return "#ffcc00"
+        return "#ff3b30"
 
     def _daily_progress(self, x: int, y: int, width: int, percent: float | None, tags: str | tuple[str, ...] = ()) -> None:
         if percent is not None and percent >= 100:
@@ -1531,9 +1530,11 @@ if sys.platform == "darwin":
             self.interval_minutes = self._load_interval_minutes(default_interval)
             self.daily_limit_credits: int | None = self._load_daily_limit_credits()
             self.daily_limit_set_at: datetime | None = self._load_daily_limit_set_at()
+            self.theme = self._load_theme()
             self.last_snapshot: UsageSnapshot | None = None
             self.last_refresh_at: datetime | None = None
             self.last_resume_check_at: datetime | None = None
+            self._keep_browser_open_override: bool | None = None
             self.refreshing = False
             self.transient_failure_since: datetime | None = None
             self.transient_failure_count = 0
@@ -1615,6 +1616,16 @@ if sys.platform == "darwin":
                 }
             )
 
+        def _load_theme(self) -> str:
+            try:
+                value = self._load_state().get("popover_theme")
+                return "dark" if value == "dark" else "light"
+            except Exception:
+                return "light"
+
+        def _save_theme(self) -> None:
+            self._save_state({"popover_theme": self.theme})
+
         def _daily_limit_expired(self) -> bool:
             set_at = self.daily_limit_set_at
             if not self.daily_limit_credits:
@@ -1637,6 +1648,8 @@ if sys.platform == "darwin":
             return True
 
         def _keep_browser_open(self) -> bool:
+            if self._keep_browser_open_override is not None:
+                return self._keep_browser_open_override
             if not self.keep_browser_open_getter:
                 return False
             try:
@@ -1685,37 +1698,71 @@ if sys.platform == "darwin":
         def _menu_bar_title(self) -> str:
             snap = self.last_snapshot
             if not snap or not snap.has_data:
-                return "NG ..."
-            # Show remaining credits from the shortest window (5h), fall back to 7d.
-            window = snap.windows[0] if snap.windows else None
+                return "..."
+            daily = self._daily_limit_values()
+            if daily:
+                spent, limit, _floor, _percent = daily
+                return f"{short_number_clean(spent)}/{short_number_clean(limit)}"
+            window = find_window(snap, "5h") or (snap.windows[0] if snap.windows else None)
             if window and window.credits_remaining is not None:
-                return f"NG {short_number(window.credits_remaining)}"
+                return short_number_clean(window.credits_remaining)
             if snap.remaining is not None:
-                return f"NG {short_number(snap.remaining)}"
-            return "NG ..."
+                return short_number_clean(snap.remaining)
+            return "..."
+
+        def _menu_bar_progress_percent(self) -> float | None:
+            snap = self.last_snapshot
+            if not snap or not snap.has_data:
+                return None
+            daily = self._daily_limit_values()
+            if daily:
+                _spent, _limit, _floor, percent = daily
+                return max(0.0, min(100.0, percent))
+            window = find_window(snap, "5h") or (snap.windows[0] if snap.windows else None)
+            if not window:
+                return None
+            percent = window.progress_percent if window.progress_percent is not None else window.limit_percent
+            if percent is None:
+                return None
+            return max(0.0, min(100.0, float(percent)))
 
         # ------------------------------------------------------------------ server actions
 
         def _register_server_actions(self) -> None:
-            self._server.on_action("refresh", lambda: self.refresh(force=True))
+            self._server.on_action("refresh", lambda _payload: self.refresh(force=True))
             self._server.on_action("hide_daily", self._on_hide_daily_limit)
-            self._server.on_action("set_daily", self._on_show_daily_limit_dialog)
+            self._server.on_action("set_daily", self._on_set_daily_limit)
             self._server.on_action("toggle_keep", self._on_toggle_keep_browser)
-            self._server.on_action("open_interval", self._on_cycle_interval)
+            self._server.on_action("set_interval", self._on_set_interval_from_payload)
+            self._server.on_action("toggle_theme", self._on_toggle_theme)
             self._server.on_action("reset_account", self._on_reset_account)
             self._server.on_action("update", self._on_start_update)
-            self._server.on_action("quit", self.close)
+            self._server.on_action("restart", self._on_restart)
+            self._server.on_action("quit", lambda _payload: self.close())
             self._server.on_resize(lambda h: self._pending.put(("resize", h)))
 
         def _push_server_data(self) -> None:
             self._expire_daily_limit_if_needed()
             snap = self.last_snapshot
             interval_label = UsageOverlay._format_interval_menu(self.interval_minutes)
+            interval_choices = [
+                {
+                    "minutes": value,
+                    "label": UsageOverlay._format_interval_pill(value),
+                    "menu_label": UsageOverlay._format_interval_menu(value),
+                }
+                for value in self.INTERVAL_CHOICES_MINUTES
+            ]
             extra = {
                 "daily_limit_enabled": self._daily_limit_enabled(),
+                "daily_limit": self._daily_limit_payload(),
+                "daily_limit_default": self._daily_limit_default_label(),
                 "keep_browser_open": self._keep_browser_open(),
                 "has_keep_toggle": self._has_keep_browser_toggle(),
                 "interval_label": interval_label,
+                "interval_minutes": self.interval_minutes,
+                "interval_choices": interval_choices,
+                "theme": self.theme,
                 "has_account_reset": bool(self.account_resetter),
                 "version_label": version_menu_label(__version__, self.update_info),
                 "version_update_available": bool(self.update_info),
@@ -1723,18 +1770,40 @@ if sys.platform == "darwin":
             self._server.update(snap, extra)
             if self._popover_ui:
                 title = self._menu_bar_title()
-                self._popover_ui.set_title(title)
+                self._popover_ui.set_status(title, self._menu_bar_progress_percent())
 
         # ------------------------------------------------------------------ callbacks
 
-        def _on_toggle_keep_browser(self, _sender: object) -> None:
+        def _on_toggle_keep_browser(self, _payload: dict[str, object]) -> None:
             if not self.keep_browser_open_setter:
                 return
-            try:
-                self.keep_browser_open_setter(not self._keep_browser_open())
-            except Exception as exc:
-                self._write_ui_log(f"toggle_keep_browser_error {exc!r}")
+            enabled = not self._keep_browser_open()
+            self._keep_browser_open_override = enabled
             self._push_server_data()
+            if not enabled:
+                self._terminate_visible_lk_now()
+
+            def apply_toggle() -> None:
+                try:
+                    self.keep_browser_open_setter(enabled)
+                except Exception as exc:
+                    self._write_ui_log(f"toggle_keep_browser_error {exc!r}")
+                finally:
+                    self._keep_browser_open_override = None
+                    self._push_server_data()
+
+            threading.Thread(target=apply_toggle, daemon=True).start()
+
+        def _terminate_visible_lk_now(self) -> None:
+            if sys.platform != "darwin":
+                return
+            try:
+                from .browser_reader import BrowserSettings, terminate_profile_browser_processes
+
+                count = terminate_profile_browser_processes(BrowserSettings().profile_dir)
+                self._write_ui_log(f"terminate_visible_lk_now count={count}")
+            except Exception as exc:
+                self._write_ui_log(f"terminate_visible_lk_now_error {exc!r}")
 
         def _on_set_interval(self, minutes: int) -> None:
             self.interval_minutes = UsageOverlay._normalize_interval_minutes(minutes)
@@ -1742,9 +1811,32 @@ if sys.platform == "darwin":
             self._reschedule_timer()
             self._push_server_data()
 
-        def _on_hide_daily_limit(self, _sender: object) -> None:
+        def _on_set_interval_from_payload(self, payload: dict[str, object]) -> None:
+            try:
+                minutes = int(payload.get("minutes") or self.interval_minutes)
+            except (TypeError, ValueError):
+                minutes = self.interval_minutes
+            self._on_set_interval(minutes)
+
+        def _on_toggle_theme(self, _payload: dict[str, object]) -> None:
+            self.theme = "light" if self.theme == "dark" else "dark"
+            self._save_theme()
+            self._push_server_data()
+
+        def _on_hide_daily_limit(self, _payload: dict[str, object]) -> None:
             self.daily_limit_credits = None
             self.daily_limit_set_at = None
+            self._save_daily_limit()
+            self._push_server_data()
+
+        def _on_set_daily_limit(self, payload: dict[str, object]) -> None:
+            value = payload.get("value")
+            parsed = UsageOverlay._parse_credit_input(str(value or ""))
+            if parsed is None:
+                self._write_ui_log(f"daily_limit_parse_error value={value!r}")
+                return
+            self.daily_limit_credits = parsed
+            self.daily_limit_set_at = datetime.now().astimezone()
             self._save_daily_limit()
             self._push_server_data()
 
@@ -1789,7 +1881,40 @@ if sys.platform == "darwin":
                 return max(1, round(window.credits_remaining / days))
             return None
 
-        def _on_reset_account(self) -> None:
+        def _daily_limit_default_label(self) -> str:
+            if self._daily_limit_enabled() and self.daily_limit_credits:
+                return short_number_clean(self.daily_limit_credits)
+            default = self._default_daily_limit_credits()
+            return short_number_clean(default) if default else ""
+
+        def _daily_limit_values(self) -> tuple[int, int, int, float] | None:
+            if not self._daily_limit_enabled() or not self.last_snapshot:
+                return None
+            limit = self.daily_limit_credits
+            if not limit:
+                return None
+            today_spent = self.daily_usage.today_spent_7d(self.last_snapshot)
+            spent = today_spent.amount if today_spent is not None else 0
+            window = find_window(self.last_snapshot, "7d")
+            floor = max(0, (window.credits_remaining if window and window.credits_remaining is not None else 0) - limit)
+            percent = min(999.0, (spent / limit) * 100)
+            return spent, limit, floor, percent
+
+        def _daily_limit_payload(self) -> dict[str, object] | None:
+            values = self._daily_limit_values()
+            if not values:
+                return None
+            spent, limit, floor, percent = values
+            return {
+                "spent": spent,
+                "limit": limit,
+                "floor": floor,
+                "percent": percent,
+                "spent_label": short_number_clean(spent),
+                "limit_label": short_number_clean(limit),
+            }
+
+        def _on_reset_account(self, _payload: dict[str, object]) -> None:
             if not self.account_resetter:
                 return
             try:
@@ -1802,7 +1927,7 @@ if sys.platform == "darwin":
             self._push_server_data()
             self._reschedule_timer()
 
-        def _on_cycle_interval(self) -> None:
+        def _on_cycle_interval(self, _payload: dict[str, object] | None = None) -> None:
             choices = self.INTERVAL_CHOICES_MINUTES
             try:
                 idx = choices.index(self.interval_minutes)
@@ -1814,7 +1939,7 @@ if sys.platform == "darwin":
             self._reschedule_timer()
             self._push_server_data()
 
-        def _on_start_update(self) -> None:
+        def _on_start_update(self, _payload: dict[str, object]) -> None:
             if not self.update_info:
                 return
             scripts_dir = Path(__file__).resolve().parents[2] / "scripts"
@@ -1833,6 +1958,39 @@ if sys.platform == "darwin":
                 self._write_ui_log(f"start_update_error {exc!r}")
                 return
             self.close()
+
+        def _on_restart(self, _payload: dict[str, object]) -> None:
+            root = Path(__file__).resolve().parents[2]
+            state_dir = Path.home() / ".neurogate-usage-overlay"
+            log_path = Path.home() / ".neurogate-usage-overlay" / "restart.log"
+            runner_command = f"cd {shlex.quote(str(root))} && exec bash scripts/run-overlay.sh >> {shlex.quote(str(log_path))} 2>&1"
+            script_path = state_dir / "restart-vibemode.sh"
+            script = "\n".join(
+                [
+                    "#!/usr/bin/env bash",
+                    "set -u",
+                    "sleep 5",
+                    "/usr/bin/screen -S vibemode -X quit 2>/dev/null || true",
+                    "/usr/bin/screen -wipe >/dev/null 2>&1 || true",
+                    f"/usr/bin/screen -dmS vibemode bash -lc {shlex.quote(runner_command)}",
+                    "",
+                ]
+            )
+            try:
+                state_dir.mkdir(parents=True, exist_ok=True)
+                script_path.write_text(script, encoding="utf-8")
+                script_path.chmod(0o700)
+                subprocess.Popen(
+                    ["/bin/bash", str(script_path)],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                    close_fds=True,
+                )
+            except Exception as exc:
+                self._write_ui_log(f"restart_error {exc!r}")
+                return
             self.close()
 
         # ------------------------------------------------------------------ refresh logic
@@ -1906,7 +2064,7 @@ if sys.platform == "darwin":
                 return
             self._write_ui_log(f"error {error!r}")
             if self._popover_ui:
-                self._popover_ui.set_title("NG !")
+                self._popover_ui.set_status("!", None)
 
         def check_for_updates(self) -> None:
             if self.update_check_running:
@@ -1992,7 +2150,7 @@ if sys.platform == "darwin":
             # Install the popover status item on main thread
             self._popover_ui = self._MenuBarPopover(
                 server_url=self._server.get_url(),
-                initial_title="NG ...",
+                initial_title="...",
             )
             self._popover_ui.install()
 

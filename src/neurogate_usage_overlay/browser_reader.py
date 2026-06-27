@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import os
 import re
+import signal
 import shutil
 import subprocess
 import sys
+import time
 from typing import Any
 from dataclasses import dataclass
 from datetime import datetime
@@ -35,6 +38,76 @@ PROFILE_CACHE_DIRS = (
     "Default/Service Worker/ScriptCache",
 )
 CACHE_SIZE_BYTES = 16 * 1024 * 1024
+PROFILE_BROWSER_TERMINATION_TIMEOUT_SECONDS = 1.5
+
+
+def terminate_profile_browser_processes(
+    profile_dir: Path,
+    *,
+    timeout_seconds: float = PROFILE_BROWSER_TERMINATION_TIMEOUT_SECONDS,
+) -> int:
+    """Terminate macOS Chrome processes that belong to the overlay profile only."""
+    if sys.platform != "darwin":
+        return 0
+    try:
+        needle = str(profile_dir.resolve())
+        result = subprocess.run(
+            ["ps", "-axo", "pid=,command="],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except Exception:
+        return 0
+
+    current_pid = os.getpid()
+    pids: set[int] = set()
+    for line in result.stdout.splitlines():
+        try:
+            pid_text, command = line.strip().split(None, 1)
+            pid = int(pid_text)
+        except ValueError:
+            continue
+        if pid == current_pid or needle not in command:
+            continue
+        pids.add(pid)
+
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except Exception:
+            continue
+
+    deadline = time.monotonic() + max(0.0, timeout_seconds)
+    while time.monotonic() < deadline:
+        alive = [pid for pid in pids if _process_is_alive(pid)]
+        if not alive:
+            break
+        time.sleep(0.05)
+
+    for pid in pids:
+        if not _process_is_alive(pid):
+            continue
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except Exception:
+            pass
+    return len(pids)
+
+
+def _process_is_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        return False
+    return True
 
 
 def _as_int(value: object) -> int | None:
@@ -339,6 +412,7 @@ class NeurogateUsageReader:
             # intermittently lose tariff data. Hidden mode uses headed Chrome
             # offscreen so the session stays equivalent to the user's browser.
             headless=False,
+            ignore_default_args=["--no-sandbox"],
             viewport={"width": 1440, "height": 950},
             args=args,
         )
@@ -355,7 +429,6 @@ class NeurogateUsageReader:
 
     def _browser_args(self, hidden: bool) -> list[str]:
         args = [
-            "--disable-blink-features=AutomationControlled",
             f"--disk-cache-size={CACHE_SIZE_BYTES}",
             f"--media-cache-size={CACHE_SIZE_BYTES}",
         ]
@@ -448,8 +521,15 @@ class NeurogateUsageReader:
 
     def _close_context(self) -> None:
         if self._context:
-            self._context.close()
-            self._context = None
+            try:
+                self._context.close()
+            except Exception as exc:
+                self._write_debug(
+                    parse_usage_text("", source_url=self.settings.usage_url),
+                    note=f"close_context_error={exc!r}",
+                )
+            finally:
+                self._context = None
         self._page = None
         self._current_headless = None
 
@@ -466,6 +546,7 @@ class NeurogateUsageReader:
     def set_keep_browser_open(self, enabled: bool) -> None:
         self.settings.headless = not enabled
         self.settings.hide_after_successful_login = not enabled
+        self.settings.show_browser_on_login = enabled
         self._write_debug(
             parse_usage_text("", source_url=self.settings.usage_url),
             note=f"keep_browser_open={enabled}",
@@ -477,6 +558,9 @@ class NeurogateUsageReader:
             self._launch_context(headless=False)
             return
         if not enabled and self._current_headless is False:
+            if sys.platform == "darwin":
+                self._hide_current_browser_window()
+                return
             self._hide_current_browser_window()
 
     def read(self) -> UsageSnapshot:
@@ -487,9 +571,12 @@ class NeurogateUsageReader:
             self._page.goto(self.settings.usage_url, wait_until="domcontentloaded")
         text = self._wait_for_usage_text()
         if self._requires_visible_login(text) and self._current_headless and self.settings.show_browser_on_login:
-            self._open_visible_login_window()
-            self._maybe_auto_submit_login()
-            text = self._wait_for_usage_text()
+            if self._maybe_auto_submit_login():
+                text = self._wait_for_usage_text()
+            if self._requires_visible_login(text):
+                self._open_visible_login_window()
+                self._maybe_auto_submit_login()
+                text = self._wait_for_usage_text()
         snapshot = (
             self._read_vibemode_api_snapshot(text)
             or _snapshot_from_vibemode_text(text, source_url=self._page.url)
@@ -576,7 +663,7 @@ class NeurogateUsageReader:
     def _maybe_auto_submit_login(self) -> bool:
         if not self.settings.auto_login or self._account_switch_pending:
             return False
-        if self._current_headless is not False or not self._page:
+        if not self._page:
             return False
         try:
             first_state = self._login_form_state()
@@ -664,6 +751,10 @@ class NeurogateUsageReader:
             self._hide_current_browser_window()
 
     def _hide_current_browser_window(self) -> int:
+        if sys.platform == "darwin":
+            self._close_context()
+            self._login_visible = False
+            return terminate_profile_browser_processes(self.settings.profile_dir)
         hidden_count = self._hide_hidden_browser_taskbar_windows()
         self._current_headless = True
         self._login_visible = False
