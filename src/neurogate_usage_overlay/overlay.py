@@ -446,7 +446,7 @@ class UsageOverlay:
 
         item_height = 24
         padding = 6
-        width = 160
+        width = 166
         keep_browser_open = self._keep_browser_open()
         keep_browser_label = "Не закрывать ЛК"
         scale_label = "2x размер"
@@ -511,7 +511,7 @@ class UsageOverlay:
 
         canvas = tk.Canvas(menu, width=width, height=height, highlightthickness=0, bd=0, bg="#18181b")
         canvas.pack(fill="both", expand=True)
-        canvas.create_rectangle(0, 0, width, height, fill="#18181b", outline="")
+        canvas.create_rectangle(0, 0, width, height, fill="#202124", outline="#3a3a40")
 
         y = padding
         for index, (label, command, active) in enumerate(rows):
@@ -522,9 +522,9 @@ class UsageOverlay:
 
             tag = f"item-{index}"
             bg_tag = f"item-bg-{index}"
-            fill = "#2c2c30" if active else "#18181b"
+            fill = "#303035" if active else "#202124"
             disabled = command is None
-            canvas.create_rectangle(4, y, width - 4, y + item_height, fill=fill, outline="", tags=(tag, bg_tag))
+            canvas.create_rectangle(5, y, width - 5, y + item_height, fill=fill, outline="", tags=(tag, bg_tag))
             text_x = 14
             if label in checkbox_labels:
                 text_x = 34
@@ -535,7 +535,7 @@ class UsageOverlay:
                     box_y,
                     box_x + 10,
                     box_y + 10,
-                    fill="#202124",
+                    fill="#18181b",
                     outline="#4a4a50",
                     width=1,
                     tags=tag,
@@ -573,7 +573,7 @@ class UsageOverlay:
                     action()
 
             if command:
-                canvas.tag_bind(tag, "<Enter>", lambda _event, bg_tag=bg_tag: canvas.itemconfigure(bg_tag, fill="#2f3035"))
+                canvas.tag_bind(tag, "<Enter>", lambda _event, bg_tag=bg_tag: canvas.itemconfigure(bg_tag, fill="#2c2c30"))
                 canvas.tag_bind(tag, "<Leave>", lambda _event, bg_tag=bg_tag, fill=fill: canvas.itemconfigure(bg_tag, fill=fill))
                 canvas.tag_bind(tag, "<Button-1>", lambda _event, action=run_action: action())
             y += item_height
@@ -739,7 +739,7 @@ class UsageOverlay:
         canvas = tk.Canvas(dialog, width=width, height=height, highlightthickness=0, bd=0, bg="#18181b")
         canvas.pack(fill="both", expand=True)
         scale = self._current_scale()
-        canvas.create_rectangle(0, 0, width, height, fill="#18181b", outline="")
+        canvas.create_rectangle(0, 0, width, height, fill="#202124", outline="#3a3a40")
         canvas.create_text(
             self._s(12),
             self._s(11),
@@ -752,7 +752,7 @@ class UsageOverlay:
             self._s(12),
             self._s(30),
             text="Например: 82M",
-            fill="#b7b7bd",
+            fill="#c9c9cf",
             font=(self.UI_FONT, self._font_size(8), "normal"),
             anchor="nw",
         )
@@ -786,7 +786,7 @@ class UsageOverlay:
         error_label = tk.Label(
             dialog,
             textvariable=error_var,
-            bg="#18181b",
+            bg="#202124",
             fg="#ff4d5d",
             font=(self.UI_FONT, self._font_size(7), "normal"),
         )
@@ -1354,10 +1354,10 @@ class UsageOverlay:
         interval_left = status_right + 4
         interval_right = min(self.WIDTH - 6, interval_left + 32)
         interval_center = (interval_left + interval_right) // 2
-        self._rounded_rect(interval_left, 5, interval_right, 21, 5, pill_fill, pill_outline, tags="interval")
+        self._rounded_rect(interval_left, 3, interval_right, 19, 5, pill_fill, pill_outline, tags="interval")
         self._text(
             interval_center,
-            13,
+            11,
             self._format_interval_pill(self.interval_minutes),
             "#b7b7bd",
             8,
