@@ -109,13 +109,14 @@ def compact_plan_status(value: str | None) -> str:
         if cleaned.lower().startswith(prefix):
             cleaned = cleaned[len(prefix) :].strip()
             break
+    cleaned = re.sub(r"\s+остал(?:ось|ся|ась|ись)?\s*$", "", cleaned, flags=re.IGNORECASE)
     return f"ост. {compact_reset_text(cleaned)}"
 
 
 class UsageOverlay:
     WIDTH = 222
-    HEIGHT = 74
-    DAILY_LIMIT_HEIGHT = 100
+    HEIGHT = 78
+    DAILY_LIMIT_HEIGHT = 106
     SCALE_NORMAL = 1
     SCALE_LARGE = 2
     MIN_REFRESH_SECONDS = 60
@@ -1367,8 +1368,8 @@ class UsageOverlay:
         )
 
         self._draw_limit_row(25, "5ч", self._window_by_index(0))
-        self._draw_limit_row(50, "7д", self._window_by_index(1))
-        self._draw_daily_limit_row(75)
+        self._draw_limit_row(53, "7д", self._window_by_index(1))
+        self._draw_daily_limit_row(81)
 
     def _apply_snapshot(self, snapshot: UsageSnapshot) -> None:
         now = datetime.now().astimezone()

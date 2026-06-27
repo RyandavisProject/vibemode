@@ -8,7 +8,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 from neurogate_usage_overlay.models import UsageSnapshot, UsageWindow
-from neurogate_usage_overlay.overlay import UsageOverlay, compact_percent, display_version, format_limit_value, version_menu_label
+from neurogate_usage_overlay.overlay import (
+    UsageOverlay,
+    compact_percent,
+    compact_plan_status,
+    display_version,
+    format_limit_value,
+    version_menu_label,
+)
 from neurogate_usage_overlay.update_checker import UpdateInfo
 
 
@@ -364,6 +371,11 @@ class OverlayPositionTest(unittest.TestCase):
 
 
 class OverlayProgressTest(unittest.TestCase):
+    def test_compact_plan_status_removes_duplicate_left_wording(self):
+        self.assertEqual(compact_plan_status("16дн осталось"), "ост. 16дн")
+        self.assertEqual(compact_plan_status("активен ещё 16дн осталось"), "ост. 16дн")
+        self.assertEqual(compact_plan_status("активен ещё 16 дней осталось"), "ост. 16д")
+
     def test_compact_percent_formats_daily_limit_progress(self):
         self.assertEqual(compact_percent(13.29), "13%")
         self.assertEqual(compact_percent(8.71), "8.7%")
