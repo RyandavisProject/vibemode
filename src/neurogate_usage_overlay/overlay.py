@@ -114,8 +114,8 @@ def compact_plan_status(value: str | None) -> str:
 
 class UsageOverlay:
     WIDTH = 222
-    HEIGHT = 70
-    DAILY_LIMIT_HEIGHT = 92
+    HEIGHT = 74
+    DAILY_LIMIT_HEIGHT = 100
     SCALE_NORMAL = 1
     SCALE_LARGE = 2
     MIN_REFRESH_SECONDS = 60
@@ -1367,8 +1367,8 @@ class UsageOverlay:
         )
 
         self._draw_limit_row(25, "5ч", self._window_by_index(0))
-        self._draw_limit_row(47, "7д", self._window_by_index(1))
-        self._draw_daily_limit_row(69)
+        self._draw_limit_row(50, "7д", self._window_by_index(1))
+        self._draw_daily_limit_row(75)
 
     def _apply_snapshot(self, snapshot: UsageSnapshot) -> None:
         now = datetime.now().astimezone()
