@@ -740,12 +740,59 @@ class UsageOverlay:
         canvas.pack(fill="both", expand=True)
         scale = self._current_scale()
         canvas.create_rectangle(0, 0, width, height, fill="#202124", outline="#3a3a40")
+
+        def rounded_rect(
+            x1: int,
+            y1: int,
+            x2: int,
+            y2: int,
+            radius: int,
+            fill: str,
+            outline: str = "",
+            tags: str | tuple[str, ...] = (),
+        ) -> None:
+            points = [
+                x1 + radius,
+                y1,
+                x2 - radius,
+                y1,
+                x2,
+                y1,
+                x2,
+                y1 + radius,
+                x2,
+                y2 - radius,
+                x2,
+                y2,
+                x2 - radius,
+                y2,
+                x1 + radius,
+                y2,
+                x1,
+                y2,
+                x1,
+                y2 - radius,
+                x1,
+                y1 + radius,
+                x1,
+                y1,
+            ]
+            canvas.create_polygon(
+                [self._s(point) for point in points],
+                smooth=True,
+                splinesteps=12 * self._current_scale(),
+                fill=fill,
+                outline=outline,
+                width=max(1, self._s(1)),
+                tags=tags,
+            )
+
         canvas.create_text(
             self._s(12),
             self._s(11),
             text="Лимит на день",
-            fill="#64d2ff",
-            font=(self.UI_FONT, self._font_size(9), "normal"),
+            fill="#f5f5f7",
+            font=(self.UI_FONT, self._font_size(9), "bold"),
             anchor="nw",
         )
         canvas.create_text(
@@ -759,15 +806,7 @@ class UsageOverlay:
 
         default_value = self._daily_limit_dialog_default_credits()
         value = tk.StringVar(value=short_number(default_value) if default_value else "")
-        canvas.create_rectangle(
-            self._s(12),
-            self._s(49),
-            self._s(104),
-            self._s(73),
-            fill="#2c2c30",
-            outline="#4a4a50",
-            width=max(1, self._s(1)),
-        )
+        rounded_rect(12, 49, 104, 73, 6, "#2c2c30", "#4a4a50")
         entry = tk.Entry(
             dialog,
             textvariable=value,
@@ -810,28 +849,28 @@ class UsageOverlay:
             self._resize_window_to_scale()
             self._render()
 
-        ok = tk.Label(
-            dialog,
+        rounded_rect(116, 49, 152, 73, 6, "#2c2c30", "#3a3a40", tags="daily-ok")
+        canvas.create_text(
+            self._s(134),
+            self._s(61),
             text="OK",
-            bg="#2c2c30",
-            fg="#64d2ff",
-            font=(self.UI_FONT, self._font_size(8), "normal"),
-            padx=0,
-            pady=0,
+            fill="#f5f5f7",
+            font=(self.UI_FONT, self._font_size(8), "bold"),
+            anchor="center",
+            tags="daily-ok",
         )
-        ok.place(x=self._s(116), y=self._s(49), width=self._s(36), height=self._s(24))
-        ok.bind("<Button-1>", lambda _event: save_limit())
-        cancel = tk.Label(
-            dialog,
+        rounded_rect(158, 49, 198, 73, 6, "#2c2c30", "#3a3a40", tags="daily-cancel")
+        canvas.create_text(
+            self._s(178),
+            self._s(61),
             text="Отмена",
-            bg="#2c2c30",
-            fg="#b7b7bd",
+            fill="#b7b7bd",
             font=(self.UI_FONT, self._font_size(8), "normal"),
-            padx=0,
-            pady=0,
+            anchor="center",
+            tags="daily-cancel",
         )
-        cancel.place(x=self._s(158), y=self._s(49), width=self._s(40), height=self._s(24))
-        cancel.bind("<Button-1>", lambda _event: close_dialog())
+        canvas.tag_bind("daily-ok", "<Button-1>", lambda _event: save_limit())
+        canvas.tag_bind("daily-cancel", "<Button-1>", lambda _event: close_dialog())
 
         dialog.bind("<Return>", lambda _event: save_limit())
         dialog.bind("<Escape>", lambda _event: close_dialog())

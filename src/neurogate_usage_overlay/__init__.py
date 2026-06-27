@@ -1,3 +1,3 @@
 """Vibemode overlay for Vibemode API limits."""
 
-__version__ = "2.2"
+__version__ = "2.3"
