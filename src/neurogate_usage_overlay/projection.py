@@ -38,7 +38,14 @@ def parse_plan_remaining(text: str | None) -> timedelta | None:
 def find_window(snapshot: UsageSnapshot, marker: str) -> UsageWindow | None:
     marker = marker.lower()
     for window in snapshot.windows:
-        if marker in window.title.lower():
+        title = window.title.lower()
+        if marker in title:
+            return window
+        if marker in {"5", "5h"} and "5" in title:
+            return window
+        if marker in {"7", "7d"} and "7" in title:
+            return window
+        if marker in {"24", "24h"} and "24" in title:
             return window
     return None
 

@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import os
-import re
 import signal
 import shutil
 import subprocess
 import sys
 import time
-from typing import Any
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -15,6 +13,11 @@ from pathlib import Path
 from .models import UsageSnapshot, UsageWindow
 from .log_utils import append_bounded_log
 from .parser import has_invalid_session, has_stale_cabinet_data, parse_usage_text
+from .vibemode_parser import (
+    _format_plan_days_left,
+    _snapshot_from_vibemode_api,
+    _snapshot_from_vibemode_text,
+)
 
 
 USAGE_URL = "https://portal.vibemod.pro/client"
@@ -25,6 +28,7 @@ LOGIN_CONFIRM_ATTEMPTS = 10
 LOGIN_PROMPT_CONFIRM_ATTEMPTS = 3
 AUTO_LOGIN_DELAY_ATTEMPTS = 3
 BODY_TEXT_TIMEOUT_MS = 3_000
+HIDDEN_SESSION_RECOVERY_COOLDOWN_SECONDS = 180
 PROFILE_CACHE_DIRS = (
     "GrShaderCache",
     "ShaderCache",
@@ -111,234 +115,6 @@ def _process_is_alive(pid: int) -> bool:
     return True
 
 
-def _as_int(value: object) -> int | None:
-    if value is None:
-        return None
-    try:
-        return round(float(value))
-    except (TypeError, ValueError):
-        return None
-
-
-def _format_plan_days_left(value: object, now: datetime | None = None) -> str | None:
-    if not value:
-        return None
-    try:
-        ends_at = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    current = now or datetime.now().astimezone()
-    if ends_at.tzinfo is None:
-        ends_at = ends_at.replace(tzinfo=current.tzinfo)
-    delta_seconds = (ends_at - current).total_seconds()
-    if delta_seconds <= 0:
-        return "истёк"
-    days = max(1, int((delta_seconds + 86_399) // 86_400))
-    return f"{days} дн осталось"
-
-
-def _vibemode_window(
-    title: str,
-    used_value: object,
-    total_value: object,
-    *,
-    reset_text: str | None = None,
-) -> UsageWindow | None:
-    used = _as_int(used_value)
-    total = _as_int(total_value)
-    if total is None or total <= 0:
-        return None
-    used = max(0, used or 0)
-    remaining = max(0, total - used)
-    return UsageWindow(
-        title=title,
-        limit_used=used,
-        limit_total=total,
-        credits_remaining=remaining,
-        reset_text=reset_text,
-        progress_percent=min(100.0, (used / total) * 100),
-    )
-
-
-def _parse_vibemode_amount(value: str | None) -> int | None:
-    if not value:
-        return None
-    cleaned = value.strip().replace("\u00a0", " ").replace(",", ".")
-    match = re.search(r"(\d+(?:\.\d+)?)\s*([kкmмbб])?", cleaned, flags=re.IGNORECASE)
-    if not match:
-        return None
-    amount = float(match.group(1))
-    suffix = (match.group(2) or "").lower()
-    multiplier = 1
-    if suffix in {"k", "к"}:
-        multiplier = 1_000
-    elif suffix in {"m", "м"}:
-        multiplier = 1_000_000
-    elif suffix in {"b", "б"}:
-        multiplier = 1_000_000_000
-    return round(amount * multiplier)
-
-
-def _vibemode_text_window(title: str, text: str) -> UsageWindow | None:
-    label = "5-часовое окно" if "5" in title else "7-дневное окно"
-    match = re.search(
-        rf"{re.escape(label)}(?P<segment>.*?)(?:\n\s*(?:КВОТА|CLAUDE|АКТИВНОСТЬ)\b|\Z)",
-        text,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    if not match:
-        return None
-    segment = match.group("segment")
-    reset_text = _vibemode_reset_text_from_segment(segment)
-    used_total = re.search(
-        r"(?P<used>\d+(?:[.,]\d+)?\s*[kкmмbб]?)\s*\n\s*из\s+(?P<total>\d+(?:[.,]\d+)?\s*[kкmмbб]?)",
-        segment,
-        flags=re.IGNORECASE,
-    )
-    if not used_total:
-        return None
-    return _vibemode_window(
-        title,
-        _parse_vibemode_amount(used_total.group("used")),
-        _parse_vibemode_amount(used_total.group("total")),
-        reset_text=reset_text,
-    )
-
-
-def _vibemode_reset_text_from_segment(segment: str) -> str | None:
-    match = re.search(r"Сброс\s+через\s+([^\n\r]+)", segment, flags=re.IGNORECASE)
-    return match.group(1).strip() if match else None
-
-
-def _vibemode_window_key(title: str) -> str:
-    if "5" in title:
-        return "5h"
-    if "7" in title:
-        return "7d"
-    return title.strip().lower()
-
-
-def _vibemode_reset_texts(text: str) -> dict[str, str]:
-    resets: dict[str, str] = {}
-    for title in ("5 часов", "7 дней"):
-        label = "5-часовое окно" if "5" in title else "7-дневное окно"
-        match = re.search(
-            rf"{re.escape(label)}(?P<segment>.*?)(?:\n\s*(?:КВОТА|CLAUDE|АКТИВНОСТЬ)\b|\Z)",
-            text,
-            flags=re.IGNORECASE | re.DOTALL,
-        )
-        if not match:
-            continue
-        reset_text = _vibemode_reset_text_from_segment(match.group("segment"))
-        if reset_text:
-            resets[_vibemode_window_key(title)] = reset_text
-    return resets
-
-
-def _attach_vibemode_reset_texts(snapshot: UsageSnapshot, text: str) -> None:
-    if not text or not snapshot.windows:
-        return
-    resets = _vibemode_reset_texts(text)
-    if not resets:
-        return
-    for window in snapshot.windows:
-        if not window.reset_text:
-            window.reset_text = resets.get(_vibemode_window_key(window.title))
-
-
-def _snapshot_from_vibemode_text(text: str, *, source_url: str | None) -> UsageSnapshot | None:
-    if "5-часовое окно" not in text.lower() or "7-дневное окно" not in text.lower():
-        return None
-
-    snapshot = UsageSnapshot(
-        updated_at=datetime.now().astimezone(),
-        source_url=source_url,
-        raw_text=text,
-    )
-
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    for index, line in enumerate(lines):
-        if line.lower() == "план" and index + 1 < len(lines):
-            snapshot.account = lines[index + 1]
-            if index + 2 < len(lines) and "остал" in lines[index + 2].lower():
-                snapshot.plan_status = lines[index + 2].lower()
-            break
-
-    windows = [
-        _vibemode_text_window("5 часов", text),
-        _vibemode_text_window("7 дней", text),
-    ]
-    snapshot.windows = [window for window in windows if window is not None]
-    return snapshot if snapshot.has_data or snapshot.account else None
-
-
-def _snapshot_from_vibemode_api(
-    profile: dict[str, Any] | None,
-    limits: dict[str, Any] | None,
-    *,
-    source_url: str | None,
-    raw_text: str = "",
-) -> UsageSnapshot | None:
-    if not profile and not limits:
-        return None
-
-    snapshot = UsageSnapshot(
-        updated_at=datetime.now().astimezone(),
-        source_url=source_url,
-        raw_text=raw_text,
-    )
-
-    plan = profile.get("plan") if isinstance(profile, dict) else None
-    if isinstance(plan, dict):
-        snapshot.account = str(plan.get("name") or plan.get("code") or "").strip() or None
-        snapshot.plan_status = _format_plan_days_left(plan.get("endsAt"))
-    elif isinstance(profile, dict):
-        plan_code = str(profile.get("currentPlanCode") or "").strip()
-        snapshot.account = plan_code.capitalize() if plan_code else None
-        snapshot.plan_status = _format_plan_days_left(profile.get("currentPlanEndsAt"))
-
-    rows = limits.get("rows") if isinstance(limits, dict) else None
-    if not isinstance(rows, list):
-        return snapshot if snapshot.account else None
-
-    default_row = next(
-        (
-            row
-            for row in rows
-            if isinstance(row, dict)
-            and row.get("scope") == "default"
-            and (_as_int(row.get("creditLimit5Hours")) or _as_int(row.get("creditLimit7Days")))
-        ),
-        None,
-    )
-    if default_row is None:
-        default_row = next(
-            (
-                row
-                for row in rows
-                if isinstance(row, dict)
-                and (_as_int(row.get("creditLimit5Hours")) or _as_int(row.get("creditLimit7Days")))
-            ),
-            None,
-        )
-    if not isinstance(default_row, dict):
-        return snapshot if snapshot.account else None
-
-    five_hour = _vibemode_window(
-        "5 часов",
-        default_row.get("credits5Hours"),
-        default_row.get("creditLimit5Hours"),
-    )
-    seven_day = _vibemode_window(
-        "7 дней",
-        default_row.get("credits7Days"),
-        default_row.get("creditLimit7Days"),
-    )
-    snapshot.windows = [window for window in (five_hour, seven_day) if window is not None]
-    _attach_vibemode_reset_texts(snapshot, raw_text)
-    return snapshot if snapshot.has_data or snapshot.account else None
-
-
 def _hide_windows_for_pids(process_ids: set[int]) -> int:
     """Hide visible browser windows by PID. Windows-only; no-op on other platforms."""
     if not process_ids or not sys.platform.startswith("win"):
@@ -386,6 +162,8 @@ class NeurogateUsageReader:
         self._login_visible = False
         self._login_prompt_opened = False
         self._account_switch_pending = False
+        self._last_hidden_session_recovery_at: float | None = None
+        self._last_vibemode_api_failure_reason: str | None = None
 
     def start(self) -> None:
         try:
@@ -564,13 +342,23 @@ class NeurogateUsageReader:
                 return
             self._hide_current_browser_window()
 
-    def read(self) -> UsageSnapshot:
+    def read(self, *, force_session_recovery: bool = False) -> UsageSnapshot:
         if not self._page:
             self.start()
         assert self._page is not None
         if self.settings.usage_url not in self._page.url:
             self._page.goto(self.settings.usage_url, wait_until="domcontentloaded")
         text = self._wait_for_usage_text()
+        recovery_attempted = False
+        recovery_reason = self._hidden_session_recovery_reason(
+            text,
+            force_session_recovery=force_session_recovery,
+        )
+        if recovery_reason:
+            recovery_attempted = True
+            recovered_text = self._recover_hidden_session(recovery_reason)
+            if recovered_text is not None:
+                text = recovered_text
         if self._requires_visible_login(text) and self._current_headless and self.settings.show_browser_on_login:
             if self._maybe_auto_submit_login():
                 text = self._wait_for_usage_text()
@@ -578,21 +366,25 @@ class NeurogateUsageReader:
                 self._open_visible_login_window()
                 self._maybe_auto_submit_login()
                 text = self._wait_for_usage_text()
-        snapshot = (
-            self._read_vibemode_api_snapshot(text)
-            or _snapshot_from_vibemode_text(text, source_url=self._page.url)
-            or parse_usage_text(text, source_url=self._page.url)
-        )
+        snapshot = self._snapshot_from_current_text(text)
+        if not snapshot.has_data and not recovery_attempted:
+            recovery_reason = self._hidden_session_recovery_reason(
+                text,
+                force_session_recovery=force_session_recovery,
+                api_failure_reason=self._last_vibemode_api_failure_reason,
+            )
+            if recovery_reason:
+                recovery_attempted = True
+                recovered_text = self._recover_hidden_session(recovery_reason)
+                if recovered_text is not None:
+                    text = recovered_text
+                    snapshot = self._snapshot_from_current_text(text)
         if not self._is_vibemode_url(self._page.url):
             self._attach_window_progress(snapshot)
         if not snapshot.windows and not self._is_login_text(text):
             self._expand_usage_card(force=True)
             text = self._wait_for_usage_text()
-            snapshot = (
-                self._read_vibemode_api_snapshot(text)
-                or _snapshot_from_vibemode_text(text, source_url=self._page.url)
-                or parse_usage_text(text, source_url=self._page.url)
-            )
+            snapshot = self._snapshot_from_current_text(text)
             if not self._is_vibemode_url(self._page.url):
                 self._attach_window_progress(snapshot)
         if snapshot.has_data:
@@ -606,7 +398,7 @@ class NeurogateUsageReader:
         self._write_debug(snapshot)
         return snapshot
 
-    def refresh(self) -> UsageSnapshot:
+    def refresh(self, force_session_recovery: bool = False) -> UsageSnapshot:
         if not self._page:
             self.start()
         assert self._page is not None
@@ -615,6 +407,8 @@ class NeurogateUsageReader:
                 self._click_portal_refresh()
             else:
                 self._page.reload(wait_until="domcontentloaded")
+        if force_session_recovery:
+            return self.read(force_session_recovery=True)
         return self.read()
 
     def _is_login_text(self, text: str) -> bool:
@@ -631,6 +425,62 @@ class NeurogateUsageReader:
 
     def _requires_visible_login(self, text: str) -> bool:
         return self._is_login_text(text) or self._is_session_invalid_text(text)
+
+    def _hidden_session_recovery_reason(
+        self,
+        text: str,
+        *,
+        force_session_recovery: bool = False,
+        api_failure_reason: str | None = None,
+    ) -> str | None:
+        if self._playwright is None or not self.settings.headless:
+            return None
+        if self._account_switch_pending:
+            return None
+        last_recovery = self._last_hidden_session_recovery_at
+        if (
+            not force_session_recovery
+            and last_recovery is not None
+            and time.monotonic() - last_recovery < HIDDEN_SESSION_RECOVERY_COOLDOWN_SECONDS
+        ):
+            return None
+        if self._is_session_invalid_text(text):
+            return "invalid_session"
+        if self._is_login_text(text):
+            return "login_prompt"
+        if has_stale_cabinet_data(text):
+            return "stale_cabinet"
+        if api_failure_reason in {"missing_token", "api_unauthorized"}:
+            return api_failure_reason
+        return None
+
+    def _recover_hidden_session(self, reason: str) -> str | None:
+        self._last_hidden_session_recovery_at = time.monotonic()
+        self._write_debug(
+            parse_usage_text("", source_url=self.settings.usage_url),
+            note=f"hidden_session_recovery_start reason={reason}",
+        )
+        try:
+            self._launch_context(headless=True)
+            recovered_text = self._wait_for_usage_text()
+        except Exception as exc:  # noqa: BLE001 - normal login flow should still continue.
+            self._write_debug(
+                parse_usage_text("", source_url=self.settings.usage_url),
+                note=f"hidden_session_recovery_error reason={reason} error={exc!r}",
+            )
+            return None
+
+        if self._requires_visible_login(recovered_text):
+            outcome = "still_requires_login"
+        elif has_stale_cabinet_data(recovered_text):
+            outcome = "still_stale"
+        else:
+            outcome = "recovered"
+        self._write_debug(
+            parse_usage_text("", source_url=self.settings.usage_url),
+            note=f"hidden_session_recovery_done reason={reason} outcome={outcome}",
+        )
+        return recovered_text
 
     def _open_visible_login_window(self) -> None:
         self._write_debug(parse_usage_text("", source_url=self.settings.usage_url), note="opening_visible_login")
@@ -839,6 +689,7 @@ class NeurogateUsageReader:
         return bool(url and "portal.vibemod.pro" in url)
 
     def _read_vibemode_api_snapshot(self, page_text: str) -> UsageSnapshot | None:
+        self._last_vibemode_api_failure_reason = None
         if not self._page or not self._is_vibemode_url(self._page.url):
             return None
         try:
@@ -862,7 +713,7 @@ class NeurogateUsageReader:
                                 return null;
                             }
                             if (typeof value === "object") {
-                                const priorityKeys = ["accessToken", "access_token", "token", "jwt", "value"];
+                                const priorityKeys = ["apiKey", "api_key", "accessToken", "access_token", "token", "jwt", "value"];
                                 for (const key of priorityKeys) {
                                     const found = visit(value[key], depth + 1);
                                     if (found) return found;
@@ -884,31 +735,57 @@ class NeurogateUsageReader:
                     const token = findToken();
                     if (!token) return { ok: false, reason: "missing_token" };
                     const headers = { "accept": "application/json", "authorization": `Bearer ${token}` };
+                    const safeJson = async (response) => {
+                        if (!response.ok) return null;
+                        try {
+                            return await response.json();
+                        } catch {
+                            return null;
+                        }
+                    };
                     const [profileResponse, limitsResponse] = await Promise.all([
-                        fetch(`${apiBaseUrl}/client/profile`, { headers }),
+                        fetch(`${apiBaseUrl}/client/me`, { headers }),
                         fetch(`${apiBaseUrl}/client/usage/limits`, { headers }),
                     ]);
                     return {
                         ok: profileResponse.ok && limitsResponse.ok,
                         profileStatus: profileResponse.status,
                         limitsStatus: limitsResponse.status,
-                        profile: profileResponse.ok ? await profileResponse.json() : null,
-                        limits: limitsResponse.ok ? await limitsResponse.json() : null,
+                        profile: await safeJson(profileResponse),
+                        limits: await safeJson(limitsResponse),
                     };
                 }""",
                 VIBEMODE_API_BASE_URL,
             )
         except Exception as exc:  # noqa: BLE001 - text parser fallback should still run.
+            self._last_vibemode_api_failure_reason = "api_error"
             self._write_debug(parse_usage_text("", source_url=self.settings.usage_url), note=f"vibemode_api_error={exc!r}")
             return None
 
-        if not isinstance(payload, dict) or not payload.get("ok"):
+        if not isinstance(payload, dict):
+            self._last_vibemode_api_failure_reason = "api_bad_payload"
+            return None
+        if not payload.get("ok"):
+            reason = str(payload.get("reason") or "")
+            statuses = (payload.get("profileStatus"), payload.get("limitsStatus"))
+            if reason == "missing_token":
+                self._last_vibemode_api_failure_reason = "missing_token"
+            elif any(status in {401, 403} for status in statuses):
+                self._last_vibemode_api_failure_reason = "api_unauthorized"
             return None
         return _snapshot_from_vibemode_api(
             payload.get("profile"),
             payload.get("limits"),
             source_url=self._page.url,
             raw_text=page_text,
+        )
+
+    def _snapshot_from_current_text(self, text: str) -> UsageSnapshot:
+        assert self._page is not None
+        return (
+            self._read_vibemode_api_snapshot(text)
+            or _snapshot_from_vibemode_text(text, source_url=self._page.url)
+            or parse_usage_text(text, source_url=self._page.url)
         )
 
     def _click_portal_refresh(self) -> None:
@@ -1067,7 +944,8 @@ class NeurogateUsageReader:
             self.settings.debug_log.parent.mkdir(parents=True, exist_ok=True)
             windows = "; ".join(
                 f"{item.title} rem={item.credits_remaining} "
-                f"used={item.limit_used}/{item.limit_total} progress={item.progress_percent}"
+                f"used={item.limit_used}/{item.limit_total} progress={item.progress_percent} "
+                f"reset={item.reset_text!r}"
                 for item in snapshot.windows
             )
             line = (

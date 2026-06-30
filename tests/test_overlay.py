@@ -1,4 +1,5 @@
 import unittest
+import sys
 import tempfile
 import threading
 import time
@@ -33,6 +34,17 @@ class FakeRoot:
 
     def update_idletasks(self) -> None:
         pass
+
+
+class FakeCallbackRoot(FakeRoot):
+    def __init__(self) -> None:
+        super().__init__()
+        self.callbacks = {}
+
+    def after(self, delay_ms: int, callback):
+        after_id = super().after(delay_ms, callback)
+        self.callbacks[after_id] = callback
+        return after_id
 
 
 class FakePositionRoot(FakeRoot):
@@ -84,6 +96,24 @@ class OverlayScheduleTest(unittest.TestCase):
 
         self.assertEqual(overlay.root.after_calls, [UsageOverlay.LOGIN_POLL_SECONDS * 1000])
 
+    def test_login_state_scheduled_refresh_forces_session_recovery(self):
+        calls: list[bool] = []
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        overlay.root = FakeCallbackRoot()
+        overlay.after_id = None
+        overlay.interval_minutes = 1
+        overlay.transient_failure_count = 0
+        overlay.last_snapshot = UsageSnapshot(updated_at=datetime.now(), status_note="РЅСѓР¶РµРЅ РІС…РѕРґ")
+        overlay.refresh = lambda force=False: calls.append(force)  # type: ignore[method-assign]
+
+        after_id = overlay._schedule_next_refresh()
+        callback = overlay.root.callbacks[overlay.after_id]
+        callback()
+
+        self.assertIsNone(after_id)
+        self.assertEqual(overlay.root.after_calls, [UsageOverlay.LOGIN_POLL_SECONDS * 1000])
+        self.assertEqual(calls, [True])
+
     def test_fresh_data_uses_selected_interval(self):
         overlay = UsageOverlay.__new__(UsageOverlay)
         overlay.root = FakeRoot()
@@ -114,6 +144,25 @@ class OverlayScheduleTest(unittest.TestCase):
 
         self.assertEqual(overlay.root.after_calls, [UsageOverlay.LOGIN_POLL_SECONDS * 1000])
 
+    def test_pending_transient_failure_scheduled_refresh_forces_session_recovery(self):
+        calls: list[bool] = []
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        overlay.root = FakeCallbackRoot()
+        overlay.after_id = None
+        overlay.interval_minutes = 10
+        overlay.transient_failure_count = 1
+        overlay.last_snapshot = UsageSnapshot(
+            updated_at=datetime.now(),
+            windows=[UsageWindow(title="5 С‡Р°СЃРѕРІ", credits_remaining=10)],
+        )
+        overlay.refresh = lambda force=False: calls.append(force)  # type: ignore[method-assign]
+
+        overlay._schedule_next_refresh()
+        overlay.root.callbacks[overlay.after_id]()
+
+        self.assertEqual(overlay.root.after_calls, [UsageOverlay.LOGIN_POLL_SECONDS * 1000])
+        self.assertEqual(calls, [True])
+
     def test_interval_is_saved_in_overlay_state(self):
         with tempfile.TemporaryDirectory() as directory:
             overlay = UsageOverlay.__new__(UsageOverlay)
@@ -124,6 +173,24 @@ class OverlayScheduleTest(unittest.TestCase):
 
             restored = UsageOverlay.__new__(UsageOverlay)
             restored.state_file = overlay.state_file
+            self.assertEqual(restored._load_interval_minutes(1), 60)
+
+    def test_corrupted_overlay_state_uses_defaults_and_can_be_rewritten(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state_file = Path(directory) / "overlay-state.json"
+            state_file.write_text("{broken", encoding="utf-8")
+
+            overlay = UsageOverlay.__new__(UsageOverlay)
+            overlay.state_file = state_file
+            overlay.interval_minutes = 60
+            overlay._write_ui_log = lambda _message: None
+
+            self.assertEqual(overlay._load_interval_minutes(3), 3)
+
+            overlay._save_interval_minutes()
+
+            restored = UsageOverlay.__new__(UsageOverlay)
+            restored.state_file = state_file
             self.assertEqual(restored._load_interval_minutes(1), 60)
 
     def test_ui_scale_is_saved_in_overlay_state(self):
@@ -427,6 +494,30 @@ class OverlayProgressTest(unittest.TestCase):
 
         self.assertEqual(overlay._daily_limit_dialog_default_credits(), 78_113_208)
 
+    def test_daily_limit_dialog_has_no_default_when_weekly_reset_text_is_missing(self):
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        overlay.daily_limit_credits = None
+        overlay.daily_limit_set_at = None
+        overlay.last_snapshot = UsageSnapshot(
+            updated_at=datetime.now(),
+            plan_status="\u043e\u0441\u0442. 13\u0434\u043d",
+            windows=[UsageWindow(title="7 \u0434\u043d\u0435\u0439", credits_remaining=354_300_000)],
+        )
+
+        self.assertIsNone(overlay._daily_limit_dialog_default_credits())
+
+    def test_daily_limit_dialog_does_not_use_plan_status_as_weekly_reset(self):
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        overlay.daily_limit_credits = None
+        overlay.daily_limit_set_at = None
+        overlay.last_snapshot = UsageSnapshot(
+            updated_at=datetime.now(),
+            plan_status="\u043e\u0441\u0442. 3\u0434",
+            windows=[UsageWindow(title="7 \u0434\u043d\u0435\u0439", credits_remaining=354_300_000)],
+        )
+
+        self.assertIsNone(overlay._daily_limit_dialog_default_credits())
+
     def test_daily_limit_dialog_never_suggests_more_than_weekly_remaining(self):
         overlay = UsageOverlay.__new__(UsageOverlay)
         overlay.daily_limit_credits = None
@@ -497,7 +588,7 @@ class OverlayProgressTest(unittest.TestCase):
     def test_zero_progress_does_not_draw_blue_fill(self):
         overlay = UsageOverlay.__new__(UsageOverlay)
         calls = []
-        overlay._rounded_rect = lambda *args, **_kwargs: calls.append(args)
+        overlay._bar_line = lambda *args, **_kwargs: calls.append(args)
 
         overlay._progress(30, 42, 184, 0)
 
@@ -538,6 +629,57 @@ class OverlayProgressTest(unittest.TestCase):
 
 
 class OverlayRenderTest(unittest.TestCase):
+    def test_large_scale_header_text_does_not_overlap_interval_pill(self):
+        snapshot = UsageSnapshot(
+            updated_at=datetime.now(),
+            account="Vibemode Pro",
+            plan_status="9 \u0434\u043d \u043e\u0441\u0442\u0430\u043b\u043e\u0441\u044c",
+            windows=[
+                UsageWindow(title="5 \u0447\u0430\u0441\u043e\u0432", credits_remaining=102_000_000),
+                UsageWindow(title="7 \u0434\u043d\u0435\u0439", credits_remaining=289_100_000),
+            ],
+        )
+        overlay = UsageOverlay(lambda: snapshot)
+        try:
+            overlay.ui_scale = UsageOverlay.SCALE_LARGE
+            overlay.last_snapshot = snapshot
+            overlay._resize_window_to_scale()
+            overlay._render()
+            overlay.root.update_idletasks()
+
+            interval_bbox = overlay.canvas.bbox("interval")
+            self.assertIsNotNone(interval_bbox)
+            assert interval_bbox is not None
+            interval_left = interval_bbox[0]
+
+            for item in overlay.canvas.find_all():
+                if overlay.canvas.type(item) != "text":
+                    continue
+                if "interval" in overlay.canvas.gettags(item):
+                    continue
+                bbox = overlay.canvas.bbox(item)
+                if not bbox or bbox[1] >= overlay._s(22):
+                    continue
+                self.assertLessEqual(bbox[2], interval_left)
+        finally:
+            overlay.close()
+
+    def test_windows_overlay_uses_transparent_background_for_rounded_corners(self):
+        if not sys.platform.startswith("win"):
+            self.skipTest("Tk transparentcolor is a Windows-only window attribute")
+
+        overlay = UsageOverlay(lambda: UsageSnapshot(updated_at=datetime.now()))
+        try:
+            self.assertEqual(overlay.root.cget("bg"), UsageOverlay.WINDOW_TRANSPARENT_COLOR)
+            self.assertEqual(overlay.canvas.cget("bg"), UsageOverlay.WINDOW_TRANSPARENT_COLOR)
+            self.assertEqual(
+                str(overlay.root.attributes("-transparentcolor")).lower(),
+                UsageOverlay.WINDOW_TRANSPARENT_COLOR,
+            )
+            self.assertEqual(float(overlay.root.attributes("-alpha")), 1.0)
+        finally:
+            overlay.close()
+
     def test_render_does_not_rebind_canvas_tags(self):
         snapshot = UsageSnapshot(
             updated_at=datetime.now(),
@@ -638,6 +780,24 @@ class OverlayRenderTest(unittest.TestCase):
 
 
 class OverlayTransientStatusTest(unittest.TestCase):
+    def test_force_refresh_passes_session_recovery_hint_to_reader(self):
+        calls: list[bool] = []
+
+        def reader(*, force_session_recovery: bool = False) -> UsageSnapshot:
+            calls.append(force_session_recovery)
+            return UsageSnapshot(
+                updated_at=datetime.now(),
+                windows=[UsageWindow(title="5 \u0447\u0430\u0441\u043e\u0432", credits_remaining=1)],
+            )
+
+        overlay = UsageOverlay(reader)
+        try:
+            overlay.refresh(force=True)
+
+            self.assertEqual(calls, [True])
+        finally:
+            overlay.close()
+
     def test_async_refresh_returns_before_slow_reader_finishes(self):
         finished = threading.Event()
         snapshot = UsageSnapshot(

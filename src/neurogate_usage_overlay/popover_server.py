@@ -493,6 +493,7 @@ class _PopoverHTTPServer(HTTPServer):
 
 class _Handler(BaseHTTPRequestHandler):
     server: "_PopoverHTTPServer"
+    MAX_POST_BODY_BYTES = 16 * 1024
 
     def log_message(self, *_args: object) -> None:
         pass
@@ -502,15 +503,18 @@ class _Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         if path == "/" or path == "/index.html":
+            if not self._require_token(ps, parsed.query):
+                return
             body = ps.render_html().encode("utf-8")
             self._respond(200, "text/html; charset=utf-8", body)
         elif path == "/data":
-            if not ps.authorize(parsed.query):
-                self._respond(403, "text/plain", b"forbidden")
+            if not self._require_token(ps, parsed.query):
                 return
             body = ps.render_json().encode("utf-8")
             self._respond(200, "application/json", body)
-        elif path.startswith("/action/"):
+        elif self._is_private_path(path):
+            if not self._require_token(ps, parsed.query):
+                return
             self._respond(405, "text/plain", b"method not allowed")
         else:
             self._respond(404, "text/plain", b"not found")
@@ -520,15 +524,17 @@ class _Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         if path.startswith("/action/"):
-            if not ps.authorize(parsed.query):
-                self._respond(403, "text/plain", b"forbidden")
+            if not self._require_token(ps, parsed.query):
+                return
+            if not self._require_acceptable_body_size():
                 return
             action = unquote(path[len("/action/") :])
             ps.handle_action(action, self._read_json_body())
             self._respond(200, "text/plain", b"ok")
         elif path.startswith("/resize/"):
-            if not ps.authorize(parsed.query):
-                self._respond(403, "text/plain", b"forbidden")
+            if not self._require_token(ps, parsed.query):
+                return
+            if not self._require_acceptable_body_size():
                 return
             try:
                 height = int(path[len("/resize/") :])
@@ -536,8 +542,33 @@ class _Handler(BaseHTTPRequestHandler):
             except ValueError:
                 pass
             self._respond(200, "text/plain", b"ok")
+        elif self._is_private_path(path):
+            if not self._require_token(ps, parsed.query):
+                return
+            self._respond(405, "text/plain", b"method not allowed")
         else:
             self._respond(404, "text/plain", b"not found")
+
+    def _is_private_path(self, path: str) -> bool:
+        return path in {"/", "/index.html", "/data"} or path.startswith(("/action/", "/resize/"))
+
+    def _require_token(self, ps: "PopoverServer", query: str) -> bool:
+        if ps.authorize(query):
+            return True
+        self._respond(403, "text/plain", b"forbidden")
+        return False
+
+    def _content_length(self) -> int:
+        try:
+            return int(self.headers.get("Content-Length") or "0")
+        except ValueError:
+            return 0
+
+    def _require_acceptable_body_size(self) -> bool:
+        if self._content_length() <= self.MAX_POST_BODY_BYTES:
+            return True
+        self._respond(413, "text/plain", b"payload too large")
+        return False
 
     def _respond(self, code: int, ctype: str, body: bytes) -> None:
         self.send_response(code)
@@ -548,10 +579,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _read_json_body(self) -> dict[str, Any]:
-        try:
-            length = int(self.headers.get("Content-Length") or "0")
-        except ValueError:
-            length = 0
+        length = self._content_length()
         if length <= 0:
             return {}
         try:

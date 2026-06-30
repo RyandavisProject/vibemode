@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-import json
 import re
 import shlex
 import subprocess
@@ -14,9 +13,11 @@ from typing import Callable
 
 from . import __version__
 from .history import DailyUsageStore, find_window, spent_since_reset, window_key
+from .json_store import load_json_object, update_json_object_atomic
 from .log_utils import append_bounded_log
 from .models import UsageSnapshot, UsageWindow
 from .update_checker import UpdateInfo, check_for_update
+from .win32_window import apply_rounded_window_region, configure_rounded_window_background
 
 
 SnapshotReader = Callable[[], UsageSnapshot]
@@ -117,6 +118,8 @@ class UsageOverlay:
     WIDTH = 222
     HEIGHT = 78
     DAILY_LIMIT_HEIGHT = 106
+    WINDOW_CORNER_RADIUS = 7
+    WINDOW_TRANSPARENT_COLOR = "#010203"
     SCALE_NORMAL = 1
     SCALE_LARGE = 2
     MIN_REFRESH_SECONDS = 60
@@ -194,8 +197,9 @@ class UsageOverlay:
         self.root.geometry(self._initial_geometry())
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
-        self.root.attributes("-alpha", 0.96)
-        self.root.configure(bg="#18181b")
+        if not sys.platform.startswith("win"):
+            self.root.attributes("-alpha", 0.96)
+        configure_rounded_window_background(self.root, self.WINDOW_TRANSPARENT_COLOR)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
         self.canvas = tk.Canvas(
@@ -204,9 +208,16 @@ class UsageOverlay:
             height=self._scaled_height(),
             highlightthickness=0,
             bd=0,
-            bg="#18181b",
+            bg=self.WINDOW_TRANSPARENT_COLOR,
         )
         self.canvas.pack(fill="both", expand=True)
+        apply_rounded_window_region(
+            self.root,
+            self._scaled_width(),
+            self._scaled_height(),
+            self._s(self.WINDOW_CORNER_RADIUS),
+            self.WINDOW_TRANSPARENT_COLOR,
+        )
 
         self._bind_window()
         self._render()
@@ -299,18 +310,11 @@ class UsageOverlay:
         return max(1, int(round(size * self._current_scale())))
 
     def _load_state(self) -> dict[str, object]:
-        try:
-            payload = json.loads(self.state_file.read_text(encoding="utf-8"))
-            return payload if isinstance(payload, dict) else {}
-        except Exception:
-            return {}
+        return load_json_object(self.state_file)
 
     def _save_state(self, updates: dict[str, object]) -> None:
         try:
-            payload = self._load_state()
-            payload.update(updates)
-            self.state_file.parent.mkdir(parents=True, exist_ok=True)
-            self.state_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            update_json_object_atomic(self.state_file, updates)
         except Exception as exc:  # noqa: BLE001 - user preferences must not break the overlay.
             self._write_ui_log(f"save_state_error {exc!r}")
 
@@ -899,6 +903,7 @@ class UsageOverlay:
         )
         self.canvas.configure(width=width, height=height)
         self.root.geometry(f"{width}x{height}+{x}+{y}")
+        apply_rounded_window_region(self.root, width, height, self._s(self.WINDOW_CORNER_RADIUS), self.WINDOW_TRANSPARENT_COLOR)
 
     def _reset_account(self) -> None:
         if not self.account_resetter:
@@ -1053,22 +1058,35 @@ class UsageOverlay:
         days = UsageOverlay._remaining_plan_days(reset_text) or UsageOverlay._remaining_plan_days(plan_status) or 1.0
         return max(1.0, days)
 
+    @staticmethod
+    def _seven_day_daily_limit_divisor_days(reset_text: str | None, plan_status: str | None = None) -> float | None:
+        reset_days = UsageOverlay._remaining_plan_days(reset_text)
+        if reset_days is not None:
+            return min(7.0, max(1.0, reset_days))
+        return None
+
     def _default_daily_limit_credits(self) -> int | None:
         if not self.last_snapshot:
             return None
         window = find_window(self.last_snapshot, "7d") or self._window_by_index(1)
         if not window or window.credits_remaining is None:
             return None
-        days = self._daily_limit_divisor_days(window.reset_text, self.last_snapshot.plan_status)
+        days = self._seven_day_daily_limit_divisor_days(window.reset_text, self.last_snapshot.plan_status)
+        if days is None:
+            return None
         return max(1, round(window.credits_remaining / days))
 
     def _schedule_next_refresh(self) -> None:
         if self.after_id:
             self.root.after_cancel(self.after_id)
         delay_ms = self.interval_minutes * 60 * 1000
-        if self._has_pending_transient_failure() or (self.last_snapshot and not self.last_snapshot.has_data):
+        force_session_recovery = self._should_force_session_recovery_on_next_refresh()
+        if force_session_recovery:
             delay_ms = self.LOGIN_POLL_SECONDS * 1000
-        self.after_id = self.root.after(delay_ms, self.refresh)
+        self.after_id = self.root.after(
+            delay_ms,
+            lambda force=force_session_recovery: self.refresh(force=force),
+        )
 
     def _schedule_resume_watchdog(self) -> None:
         if self.resume_after_id:
@@ -1093,6 +1111,9 @@ class UsageOverlay:
 
     def _has_pending_transient_failure(self) -> bool:
         return self._has_displayable_data() and getattr(self, "transient_failure_count", 0) > 0
+
+    def _should_force_session_recovery_on_next_refresh(self) -> bool:
+        return self._has_pending_transient_failure() or bool(self.last_snapshot and not self.last_snapshot.has_data)
 
     def _stable_status_text(self) -> str:
         if self.last_snapshot and self.last_snapshot.has_data:
@@ -1138,41 +1159,106 @@ class UsageOverlay:
         width: int = 1,
         tags: str | tuple[str, ...] = (),
     ) -> None:
-        points = [
-            x1 + radius,
-            y1,
-            x2 - radius,
-            y1,
-            x2,
-            y1,
-            x2,
-            y1 + radius,
-            x2,
-            y2 - radius,
-            x2,
-            y2,
-            x2 - radius,
-            y2,
-            x1 + radius,
-            y2,
-            x1,
-            y2,
-            x1,
-            y2 - radius,
-            x1,
-            y1 + radius,
-            x1,
-            y1,
-        ]
-        self.canvas.create_polygon(
-            [self._s(point) for point in points],
-            smooth=True,
-            splinesteps=12 * self._current_scale(),
-            fill=fill,
-            outline=outline,
-            width=max(1, self._s(width)),
+        radius = max(0, min(radius, (x2 - x1) // 2, (y2 - y1) // 2))
+        if radius <= 0:
+            self.canvas.create_rectangle(
+                self._s(x1),
+                self._s(y1),
+                self._s(x2),
+                self._s(y2),
+                fill=fill,
+                outline=outline,
+                width=max(1, self._s(width)),
+                tags=tags,
+            )
+            return
+
+        scaled_width = max(1, self._s(width))
+        rects = (
+            (x1 + radius, y1, x2 - radius, y2),
+            (x1, y1 + radius, x2, y2 - radius),
+        )
+        arcs = (
+            (x1, y1, x1 + radius * 2, y1 + radius * 2, 90),
+            (x2 - radius * 2, y1, x2, y1 + radius * 2, 0),
+            (x2 - radius * 2, y2 - radius * 2, x2, y2, 270),
+            (x1, y2 - radius * 2, x1 + radius * 2, y2, 180),
+        )
+        for left, top, right, bottom in rects:
+            self.canvas.create_rectangle(
+                self._s(left),
+                self._s(top),
+                self._s(right),
+                self._s(bottom),
+                fill=fill,
+                outline="",
+                tags=tags,
+            )
+        for left, top, right, bottom, start in arcs:
+            self.canvas.create_arc(
+                self._s(left),
+                self._s(top),
+                self._s(right),
+                self._s(bottom),
+                start=start,
+                extent=90,
+                style=tk.PIESLICE,
+                fill=fill,
+                outline="",
+                tags=tags,
+            )
+        if not outline:
+            return
+
+        self.canvas.create_line(
+            self._s(x1 + radius),
+            self._s(y1),
+            self._s(x2 - radius),
+            self._s(y1),
+            fill=outline,
+            width=scaled_width,
             tags=tags,
         )
+        self.canvas.create_line(
+            self._s(x2),
+            self._s(y1 + radius),
+            self._s(x2),
+            self._s(y2 - radius),
+            fill=outline,
+            width=scaled_width,
+            tags=tags,
+        )
+        self.canvas.create_line(
+            self._s(x2 - radius),
+            self._s(y2),
+            self._s(x1 + radius),
+            self._s(y2),
+            fill=outline,
+            width=scaled_width,
+            tags=tags,
+        )
+        self.canvas.create_line(
+            self._s(x1),
+            self._s(y2 - radius),
+            self._s(x1),
+            self._s(y1 + radius),
+            fill=outline,
+            width=scaled_width,
+            tags=tags,
+        )
+        for left, top, right, bottom, start in arcs:
+            self.canvas.create_arc(
+                self._s(left),
+                self._s(top),
+                self._s(right),
+                self._s(bottom),
+                start=start,
+                extent=90,
+                style=tk.ARC,
+                outline=outline,
+                width=scaled_width,
+                tags=tags,
+            )
 
     def _text(
         self,
@@ -1210,13 +1296,46 @@ class UsageOverlay:
             return 0
         return math.ceil((bbox[2] - bbox[0]) / self._current_scale())
 
+    def _fit_text_to_width(
+        self,
+        text: str,
+        max_width: int,
+        size: int = 8,
+        weight: str = "normal",
+        family: str | None = None,
+    ) -> str:
+        if max_width <= 0:
+            return ""
+        if self._measure_text(text, size, weight, family) <= max_width:
+            return text
+        ellipsis = "..."
+        if self._measure_text(ellipsis, size, weight, family) > max_width:
+            return ""
+        fitted = text
+        while fitted and self._measure_text(f"{fitted}{ellipsis}", size, weight, family) > max_width:
+            fitted = fitted[:-1].rstrip()
+        return f"{fitted}{ellipsis}" if fitted else ellipsis
+
+    def _bar_line(self, x: int, y: int, width: int, color: str, thickness: int = 4, tags: str | tuple[str, ...] = ()) -> None:
+        center_y = y + thickness / 2
+        self.canvas.create_line(
+            self._s(x),
+            self._s(center_y),
+            self._s(x + width),
+            self._s(center_y),
+            fill=color,
+            width=max(1, self._s(thickness)),
+            capstyle=tk.ROUND,
+            tags=tags,
+        )
+
     def _progress(self, x: int, y: int, width: int, percent: float | None, tags: str | tuple[str, ...] = ()) -> None:
-        self._rounded_rect(x, y, x + width, y + 4, 2, "#3a3a40", tags=tags)
+        self._bar_line(x, y, width, "#3a3a40", tags=tags)
         if percent is None:
             return
         fill_width = min(width, max(0, int(width * max(0.0, min(1.0, percent / 100)))))
         if fill_width > 0:
-            self._rounded_rect(x, y, x + fill_width, y + 4, 2, self._daily_progress_color(percent), tags=tags)
+            self._bar_line(x, y, fill_width, self._daily_progress_color(percent), tags=tags)
 
     @staticmethod
     def _mix_color(start: str, end: str, amount: float) -> str:
@@ -1235,15 +1354,15 @@ class UsageOverlay:
 
     def _daily_progress(self, x: int, y: int, width: int, percent: float | None, tags: str | tuple[str, ...] = ()) -> None:
         if percent is not None and percent >= 100:
-            self._rounded_rect(x - 2, y - 1, x + width + 2, y + 5, 3, "#4a2025", tags=tags)
-        self._rounded_rect(x, y, x + width, y + 4, 2, "#3a3a40", tags=tags)
+            self._bar_line(x - 2, y - 1, width + 4, "#4a2025", 6, tags=tags)
+        self._bar_line(x, y, width, "#3a3a40", tags=tags)
         if percent is None:
             return
         fill_width = min(width, max(0, int(width * max(0.0, min(1.0, percent / 100)))))
         if fill_width <= 0:
             return
         color = self._daily_progress_color(percent)
-        self._rounded_rect(x, y, x + fill_width, y + 4, 2, color, tags=tags)
+        self._bar_line(x, y, fill_width, color, tags=tags)
 
     def _window_progress_percent(self, window: UsageWindow | None) -> float | None:
         if not window:
@@ -1351,8 +1470,8 @@ class UsageOverlay:
         self.tooltip_text_by_tag = {}
         self.canvas.delete("all")
         content_height = self._content_height()
-        self._rounded_rect(0, 0, self.WIDTH, content_height, 8, "#18181b")
-        self._rounded_rect(1, 1, self.WIDTH - 1, content_height - 1, 8, "#202124", "#3a3a40")
+        self._rounded_rect(0, 0, self.WIDTH, content_height, self.WINDOW_CORNER_RADIUS, "#18181b")
+        self._rounded_rect(1, 1, self.WIDTH - 1, content_height - 1, self.WINDOW_CORNER_RADIUS, "#202124", "#3a3a40")
 
         snapshot = self.last_snapshot
         if snapshot and not snapshot.has_data:
@@ -1373,25 +1492,23 @@ class UsageOverlay:
         plan_status = compact_plan_status(snapshot.plan_status if snapshot else None)
         plan_text = plan_status or self.status_text
         account_x = 12
-        account_width = self._measure_text(account, 8, family=self.UI_FONT)
+        interval_right = self.WIDTH - 6
+        interval_left = interval_right - 32
+        header_right = interval_left - 4
+        account_width = self._measure_text(account, 8, "bold", family=self.UI_FONT)
+        account_max_width = max(42, min(account_width, header_right - account_x - 36))
+        account = self._fit_text_to_width(account, account_max_width, 8, "bold", self.UI_FONT)
+        account_width = self._measure_text(account, 8, "bold", family=self.UI_FONT)
         plan_x = account_x + account_width + 8
-        plan_width = self._measure_text(plan_text, 8, family=self.UI_FONT)
-        left_pill_right = min(124, plan_x + plan_width + 4)
+        plan_text = self._fit_text_to_width(plan_text, max(0, header_right - plan_x), 8, "normal", self.UI_FONT)
         pill_fill = "#2c2c30"
         pill_outline = "#3a3a40"
         self._text(12, 6, account, "#f5f5f7", 8, "bold", family=self.UI_FONT)
         if plan_status:
-            self._text(plan_x, 6, plan_status, "#b7b7bd", 8, "normal", family=self.UI_FONT)
+            self._text(plan_x, 6, plan_text, "#b7b7bd", 8, "normal", family=self.UI_FONT)
         else:
-            self._text(plan_x, 6, self.status_text, "#8d8d95", 8, "normal", family=self.UI_FONT)
+            self._text(plan_x, 6, plan_text, "#8d8d95", 8, "normal", family=self.UI_FONT)
 
-        status_width = self._measure_text(self.status_text, 8, family=self.UI_FONT)
-        status_left = left_pill_right + 3
-        status_right = min(196, status_left + status_width + 8)
-        status_center = (status_left + status_right) // 2
-        self._text(status_center, 13, self.status_text, "#8d8d95", 8, "normal", "center", family=self.UI_FONT)
-        interval_left = status_right + 4
-        interval_right = min(self.WIDTH - 6, interval_left + 32)
         interval_center = (interval_left + interval_right) // 2
         self._rounded_rect(interval_left, 3, interval_right, 19, 5, pill_fill, pill_outline, tags="interval")
         self._text(
@@ -1449,6 +1566,14 @@ class UsageOverlay:
         except Exception:
             pass
 
+    def _read_snapshot(self, *, force_session_recovery: bool = False) -> UsageSnapshot:
+        try:
+            return self.reader(force_session_recovery=force_session_recovery)  # type: ignore[call-arg]
+        except TypeError as exc:
+            if "force_session_recovery" not in str(exc):
+                raise
+            return self.reader()
+
     def _finish_refresh(self, snapshot: UsageSnapshot | None = None, error: object | None = None) -> None:
         try:
             if error is not None:
@@ -1459,9 +1584,9 @@ class UsageOverlay:
             self.refreshing = False
             self._schedule_next_refresh()
 
-    def _refresh_in_background(self) -> None:
+    def _refresh_in_background(self, force_session_recovery: bool = False) -> None:
         try:
-            snapshot = self.reader()
+            snapshot = self._read_snapshot(force_session_recovery=force_session_recovery)
         except Exception as exc:  # noqa: BLE001 - show operational errors without crashing.
             try:
                 self.root.after(0, lambda error=exc: self._finish_refresh(error=error))
@@ -1495,11 +1620,11 @@ class UsageOverlay:
             self.status_text = "обновляю"
             self._render()
         if getattr(self, "async_refresh", False):
-            threading.Thread(target=self._refresh_in_background, daemon=True).start()
+            threading.Thread(target=self._refresh_in_background, args=(force,), daemon=True).start()
             return
         self.root.update_idletasks()
         try:
-            self._finish_refresh(snapshot=self.reader())
+            self._finish_refresh(snapshot=self._read_snapshot(force_session_recovery=force))
         except Exception as exc:  # noqa: BLE001 - show operational errors without crashing.
             self._finish_refresh(error=exc)
 
@@ -1607,18 +1732,11 @@ if sys.platform == "darwin":
         # ------------------------------------------------------------------ state helpers
 
         def _load_state(self) -> dict[str, object]:
-            try:
-                payload = json.loads(self.state_file.read_text(encoding="utf-8"))
-                return payload if isinstance(payload, dict) else {}
-            except Exception:
-                return {}
+            return load_json_object(self.state_file)
 
         def _save_state(self, updates: dict[str, object]) -> None:
             try:
-                payload = self._load_state()
-                payload.update(updates)
-                self.state_file.parent.mkdir(parents=True, exist_ok=True)
-                self.state_file.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+                update_json_object_atomic(self.state_file, updates)
             except Exception as exc:
                 self._write_ui_log(f"save_state_error {exc!r}")
 
@@ -1716,6 +1834,9 @@ if sys.platform == "darwin":
         def _has_pending_transient_failure(self) -> bool:
             return self._has_displayable_data() and self.transient_failure_count > 0
 
+        def _should_force_session_recovery_on_next_refresh(self) -> bool:
+            return self._has_pending_transient_failure() or bool(self.last_snapshot and not self.last_snapshot.has_data)
+
         def _clear_transient_failure(self) -> None:
             self.transient_failure_since = None
             self.transient_failure_count = 0
@@ -1741,6 +1862,14 @@ if sys.platform == "darwin":
                 append_bounded_log(self.debug_log, f"{datetime.now().isoformat(timespec='seconds')} {message}\n")
             except Exception:
                 pass
+
+        def _read_snapshot(self, *, force_session_recovery: bool = False) -> UsageSnapshot:
+            try:
+                return self.reader(force_session_recovery=force_session_recovery)  # type: ignore[call-arg]
+            except TypeError as exc:
+                if "force_session_recovery" not in str(exc):
+                    raise
+                return self.reader()
 
         # ------------------------------------------------------------------ title helpers
 
@@ -1926,7 +2055,9 @@ if sys.platform == "darwin":
                 return None
             window = find_window(self.last_snapshot, "7d")
             if window and window.credits_remaining is not None:
-                days = UsageOverlay._daily_limit_divisor_days(window.reset_text, self.last_snapshot.plan_status)
+                days = UsageOverlay._seven_day_daily_limit_divisor_days(window.reset_text, self.last_snapshot.plan_status)
+                if days is None:
+                    return None
                 return max(1, round(window.credits_remaining / days))
             return None
 
@@ -2059,17 +2190,17 @@ if sys.platform == "darwin":
                 return
             self.refreshing = True
             if self.async_refresh:
-                threading.Thread(target=self._refresh_in_background, daemon=True).start()
+                threading.Thread(target=self._refresh_in_background, args=(force,), daemon=True).start()
             else:
                 try:
-                    self._finish_refresh(snapshot=self.reader())
+                    self._finish_refresh(snapshot=self._read_snapshot(force_session_recovery=force))
                 except Exception as exc:
                     self._finish_refresh(error=exc)
 
-        def _refresh_in_background(self) -> None:
+        def _refresh_in_background(self, force_session_recovery: bool = False) -> None:
             self._write_ui_log("refresh_background_start")
             try:
-                snapshot = self.reader()
+                snapshot = self._read_snapshot(force_session_recovery=force_session_recovery)
             except Exception as exc:
                 self._write_ui_log(f"refresh_background_error {exc!r}")
                 self._pending.put(("error", exc))
@@ -2177,13 +2308,14 @@ if sys.platform == "darwin":
         def _reschedule_timer(self) -> None:
             self._cancel_ns_timer(self._ns_timer)
             delay = self.interval_minutes * 60
-            if self._has_pending_transient_failure() or (self.last_snapshot and not self.last_snapshot.has_data):
+            force_session_recovery = self._should_force_session_recovery_on_next_refresh()
+            if force_session_recovery:
                 delay = 2
 
             def _tick() -> None:
                 self._cancel_ns_timer(self._ns_timer)
                 self._ns_timer = None
-                self.refresh()
+                self.refresh(force=force_session_recovery)
 
             self._ns_timer = self._make_ns_timer(delay, _tick)
 

@@ -1,5 +1,6 @@
 import unittest
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -82,6 +83,81 @@ class BrowserReaderModeTest(unittest.TestCase):
         self.assertEqual(snapshot.windows[1].credits_remaining, 263_441_395)
         self.assertEqual(snapshot.windows[1].reset_text, "20ч 7м")
         self.assertAlmostEqual(snapshot.windows[1].progress_percent or 0, 56.09, places=2)
+
+    def test_snapshot_from_vibemode_api_uses_profile_window_reset_timestamps(self):
+        now = datetime(2026, 6, 30, 8, 0, tzinfo=timezone.utc)
+
+        snapshot = _snapshot_from_vibemode_api(
+            {
+                "currentPlanCode": "ascend",
+                "currentPlanEndsAt": "2026-07-12T13:15:55.09452+00:00",
+                "usage": {
+                    "rows": [
+                        {
+                            "scope": "default",
+                            "window5HoursEndsAt": "2026-06-30T12:17:44.230927+00:00",
+                            "window7DaysEndsAt": "2026-07-03T18:26:52.081267+00:00",
+                        }
+                    ]
+                },
+            },
+            {
+                "rows": [
+                    {
+                        "scope": "default",
+                        "creditLimit5Hours": 120_000_000,
+                        "creditLimit7Days": 600_000_000,
+                        "credits5Hours": 12_387_470,
+                        "credits7Days": 257_271_919,
+                    }
+                ],
+            },
+            source_url="https://portal.vibemod.pro/client",
+            now=now,
+        )
+
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        self.assertEqual(snapshot.account, "Ascend")
+        self.assertEqual(snapshot.windows[0].credits_remaining, 107_612_530)
+        self.assertEqual(snapshot.windows[0].reset_text, "4ч 18м")
+        self.assertEqual(snapshot.windows[1].credits_remaining, 342_728_081)
+        self.assertEqual(snapshot.windows[1].reset_text, "3д 10ч")
+
+    def test_snapshot_from_vibemode_api_accepts_snake_case_reset_timestamps(self):
+        now = datetime(2026, 6, 30, 8, 0, tzinfo=timezone.utc)
+
+        snapshot = _snapshot_from_vibemode_api(
+            {
+                "usage": {
+                    "rows": [
+                        {
+                            "scope": "default",
+                            "window_5_hours_ends_at": "2026-06-30T09:05:00+00:00",
+                            "window_7_days_ends_at": "2026-07-01T20:00:00+00:00",
+                        }
+                    ]
+                },
+            },
+            {
+                "rows": [
+                    {
+                        "scope": "default",
+                        "creditLimit5Hours": 120_000_000,
+                        "creditLimit7Days": 600_000_000,
+                        "credits5Hours": 1,
+                        "credits7Days": 2,
+                    }
+                ],
+            },
+            source_url="https://portal.vibemod.pro/client",
+            now=now,
+        )
+
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        self.assertEqual(snapshot.windows[0].reset_text, "1ч 5м")
+        self.assertEqual(snapshot.windows[1].reset_text, "1д 12ч")
 
     def test_snapshot_from_vibemode_dashboard_text_converts_used_to_remaining(self):
         snapshot = _snapshot_from_vibemode_text(
@@ -336,6 +412,299 @@ class BrowserReaderModeTest(unittest.TestCase):
         self.assertEqual(opens, 1)
         self.assertFalse(snapshot.has_data)
         self.assertEqual(snapshot.status_note, "нужен вход")
+
+    def test_hidden_login_after_sleep_recovers_context_before_visible_prompt(self):
+        reader = NeurogateUsageReader(BrowserSettings(headless=True))
+        reader._playwright = object()
+        reader._page = type("Page", (), {"url": reader.settings.usage_url})()
+        reader._current_headless = True
+        texts = iter(["EMAIL\nPASSWORD\nlogin", "dashboard"])
+        launches: list[bool] = []
+        opened_visible: list[bool] = []
+        debug_notes: list[str] = []
+
+        def launch_context(*, headless: bool) -> None:
+            launches.append(headless)
+            reader._current_headless = headless
+            reader._page = type("Page", (), {"url": reader.settings.usage_url})()
+
+        def api_snapshot(text: str) -> UsageSnapshot | None:
+            if text != "dashboard":
+                return None
+            return UsageSnapshot(
+                updated_at=datetime.now(),
+                windows=[UsageWindow(title="5 часов", credits_remaining=102_000_000)],
+            )
+
+        reader._wait_for_usage_text = lambda: next(texts)  # type: ignore[method-assign]
+        reader._launch_context = launch_context  # type: ignore[method-assign]
+        reader._read_vibemode_api_snapshot = api_snapshot  # type: ignore[method-assign]
+        reader._open_visible_login_window = lambda: opened_visible.append(True)  # type: ignore[method-assign]
+        reader._hide_visible_browser_after_success = lambda: None  # type: ignore[method-assign]
+        reader._write_debug = lambda _snapshot, note="": debug_notes.append(note)  # type: ignore[method-assign]
+
+        snapshot = reader.read()
+
+        self.assertTrue(snapshot.has_data)
+        self.assertEqual(launches, [True])
+        self.assertEqual(opened_visible, [])
+        self.assertTrue(any("hidden_session_recovery_start" in note for note in debug_notes))
+        self.assertTrue(any("outcome=recovered" in note for note in debug_notes))
+
+    def test_hidden_missing_api_token_after_sleep_recovers_context_before_login_prompt(self):
+        reader = NeurogateUsageReader(BrowserSettings(headless=True))
+        reader._playwright = object()
+        reader._page = type("Page", (), {"url": reader.settings.usage_url})()
+        reader._current_headless = True
+        texts = iter(["dashboard shell", "dashboard recovered"])
+        launches: list[bool] = []
+        opened_visible: list[bool] = []
+
+        def launch_context(*, headless: bool) -> None:
+            launches.append(headless)
+            reader._current_headless = headless
+            reader._page = type("Page", (), {"url": reader.settings.usage_url})()
+
+        def api_snapshot(text: str) -> UsageSnapshot | None:
+            if text == "dashboard shell":
+                reader._last_vibemode_api_failure_reason = "missing_token"
+                return None
+            return UsageSnapshot(
+                updated_at=datetime.now(),
+                windows=[UsageWindow(title="5 С‡Р°СЃРѕРІ", credits_remaining=102_000_000)],
+            )
+
+        reader._wait_for_usage_text = lambda: next(texts)  # type: ignore[method-assign]
+        reader._launch_context = launch_context  # type: ignore[method-assign]
+        reader._read_vibemode_api_snapshot = api_snapshot  # type: ignore[method-assign]
+        reader._open_visible_login_window = lambda: opened_visible.append(True)  # type: ignore[method-assign]
+        reader._hide_visible_browser_after_success = lambda: None  # type: ignore[method-assign]
+        reader._write_debug = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+
+        snapshot = reader.read()
+
+        self.assertTrue(snapshot.has_data)
+        self.assertEqual(launches, [True])
+        self.assertEqual(opened_visible, [])
+
+    def test_hidden_stale_cabinet_after_sleep_recovers_without_login_status(self):
+        reader = NeurogateUsageReader(BrowserSettings(headless=True))
+        reader._playwright = object()
+        reader._page = type("Page", (), {"url": reader.settings.usage_url})()
+        reader._current_headless = True
+        texts = iter(["could not load cabinet data.", "dashboard"])
+        launches: list[bool] = []
+        opened_visible: list[bool] = []
+
+        def launch_context(*, headless: bool) -> None:
+            launches.append(headless)
+            reader._current_headless = headless
+            reader._page = type("Page", (), {"url": reader.settings.usage_url})()
+
+        reader._wait_for_usage_text = lambda: next(texts)  # type: ignore[method-assign]
+        reader._launch_context = launch_context  # type: ignore[method-assign]
+        reader._read_vibemode_api_snapshot = lambda text: UsageSnapshot(  # type: ignore[method-assign]
+            updated_at=datetime.now(),
+            windows=[UsageWindow(title="5h", credits_remaining=1)],
+        ) if text == "dashboard" else None
+        reader._open_visible_login_window = lambda: opened_visible.append(True)  # type: ignore[method-assign]
+        reader._hide_visible_browser_after_success = lambda: None  # type: ignore[method-assign]
+        reader._write_debug = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+
+        snapshot = reader.read()
+
+        self.assertTrue(snapshot.has_data)
+        self.assertIsNone(snapshot.status_note)
+        self.assertEqual(launches, [True])
+        self.assertEqual(opened_visible, [])
+
+    def test_hidden_invalid_session_after_sleep_recovers_without_login_status(self):
+        reader = NeurogateUsageReader(BrowserSettings(headless=True))
+        reader._playwright = object()
+        reader._page = type("Page", (), {"url": reader.settings.usage_url})()
+        reader._current_headless = True
+        texts = iter(["session expired", "dashboard"])
+        launches: list[bool] = []
+        opened_visible: list[bool] = []
+
+        def launch_context(*, headless: bool) -> None:
+            launches.append(headless)
+            reader._current_headless = headless
+            reader._page = type("Page", (), {"url": reader.settings.usage_url})()
+
+        reader._wait_for_usage_text = lambda: next(texts)  # type: ignore[method-assign]
+        reader._launch_context = launch_context  # type: ignore[method-assign]
+        reader._read_vibemode_api_snapshot = lambda text: UsageSnapshot(  # type: ignore[method-assign]
+            updated_at=datetime.now(),
+            windows=[UsageWindow(title="5h", credits_remaining=1)],
+        ) if text == "dashboard" else None
+        reader._open_visible_login_window = lambda: opened_visible.append(True)  # type: ignore[method-assign]
+        reader._hide_visible_browser_after_success = lambda: None  # type: ignore[method-assign]
+        reader._write_debug = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+
+        snapshot = reader.read()
+
+        self.assertTrue(snapshot.has_data)
+        self.assertIsNone(snapshot.status_note)
+        self.assertEqual(launches, [True])
+        self.assertEqual(opened_visible, [])
+
+    def test_failed_hidden_session_recovery_opens_visible_login_once(self):
+        reader = NeurogateUsageReader(BrowserSettings(headless=True))
+        reader._playwright = object()
+        reader._page = type("Page", (), {"url": reader.settings.usage_url})()
+        reader._current_headless = True
+        texts = iter([
+            "EMAIL\nPASSWORD\nlogin",
+            "EMAIL\nPASSWORD\nlogin",
+            "EMAIL\nPASSWORD\nlogin",
+        ])
+        launches: list[bool] = []
+        opened_visible: list[bool] = []
+
+        def launch_context(*, headless: bool) -> None:
+            launches.append(headless)
+            reader._current_headless = headless
+            reader._page = type("Page", (), {"url": reader.settings.usage_url})()
+
+        def open_visible_login_window() -> None:
+            opened_visible.append(True)
+            launch_context(headless=False)
+            reader._login_visible = True
+
+        reader._wait_for_usage_text = lambda: next(texts)  # type: ignore[method-assign]
+        reader._launch_context = launch_context  # type: ignore[method-assign]
+        reader._open_visible_login_window = open_visible_login_window  # type: ignore[method-assign]
+        reader._maybe_auto_submit_login = lambda: False  # type: ignore[method-assign]
+        reader._write_debug = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+
+        snapshot = reader.read()
+
+        self.assertFalse(snapshot.has_data)
+        self.assertEqual(snapshot.status_note, reader._fallback_status(snapshot.raw_text))
+        self.assertEqual(launches, [True, False])
+        self.assertEqual(opened_visible, [True])
+
+    def test_hidden_session_recovery_cooldown_prevents_reopen_loop(self):
+        reader = NeurogateUsageReader(BrowserSettings(headless=True))
+        reader._playwright = object()
+        reader._page = type("Page", (), {"url": reader.settings.usage_url})()
+        reader._current_headless = True
+        reader._last_hidden_session_recovery_at = time.monotonic()
+        launches: list[bool] = []
+        opened_visible: list[bool] = []
+
+        def open_visible_login_window() -> None:
+            opened_visible.append(True)
+            reader._current_headless = False
+            reader._login_visible = True
+
+        reader._wait_for_usage_text = lambda: "EMAIL\nPASSWORD\nlogin"  # type: ignore[method-assign]
+        reader._launch_context = lambda *, headless: launches.append(headless)  # type: ignore[method-assign]
+        reader._open_visible_login_window = open_visible_login_window  # type: ignore[method-assign]
+        reader._maybe_auto_submit_login = lambda: False  # type: ignore[method-assign]
+        reader._write_debug = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+
+        snapshot = reader.read()
+
+        self.assertFalse(snapshot.has_data)
+        self.assertEqual(launches, [])
+        self.assertEqual(opened_visible, [True])
+
+    def test_force_hidden_session_recovery_bypasses_cooldown(self):
+        reader = NeurogateUsageReader(BrowserSettings(headless=True))
+        reader._playwright = object()
+        reader._page = type("Page", (), {"url": reader.settings.usage_url})()
+        reader._current_headless = True
+        reader._last_hidden_session_recovery_at = time.monotonic()
+        texts = iter(["EMAIL\nPASSWORD\nlogin", "dashboard"])
+        launches: list[bool] = []
+        opened_visible: list[bool] = []
+
+        def launch_context(*, headless: bool) -> None:
+            launches.append(headless)
+            reader._current_headless = headless
+            reader._page = type("Page", (), {"url": reader.settings.usage_url})()
+
+        reader._wait_for_usage_text = lambda: next(texts)  # type: ignore[method-assign]
+        reader._launch_context = launch_context  # type: ignore[method-assign]
+        reader._read_vibemode_api_snapshot = lambda text: UsageSnapshot(  # type: ignore[method-assign]
+            updated_at=datetime.now(),
+            windows=[UsageWindow(title="5 часов", credits_remaining=1)],
+        ) if text == "dashboard" else None
+        reader._open_visible_login_window = lambda: opened_visible.append(True)  # type: ignore[method-assign]
+        reader._hide_visible_browser_after_success = lambda: None  # type: ignore[method-assign]
+        reader._write_debug = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+
+        snapshot = reader.read(force_session_recovery=True)
+
+        self.assertTrue(snapshot.has_data)
+        self.assertEqual(launches, [True])
+        self.assertEqual(opened_visible, [])
+
+    def test_visible_login_stuck_state_can_recover_hidden_session(self):
+        reader = NeurogateUsageReader(BrowserSettings(headless=True))
+        reader._playwright = object()
+        reader._page = type("Page", (), {"url": reader.settings.usage_url})()
+        reader._current_headless = False
+        reader._login_visible = True
+        texts = iter(["EMAIL\nPASSWORD\nlogin", "dashboard"])
+        launches: list[bool] = []
+
+        def launch_context(*, headless: bool) -> None:
+            launches.append(headless)
+            reader._current_headless = headless
+            reader._login_visible = False
+            reader._page = type("Page", (), {"url": reader.settings.usage_url})()
+
+        reader._wait_for_usage_text = lambda: next(texts)  # type: ignore[method-assign]
+        reader._launch_context = launch_context  # type: ignore[method-assign]
+        reader._read_vibemode_api_snapshot = lambda text: UsageSnapshot(  # type: ignore[method-assign]
+            updated_at=datetime.now(),
+            windows=[UsageWindow(title="5 часов", credits_remaining=1)],
+        ) if text == "dashboard" else None
+        reader._hide_visible_browser_after_success = lambda: None  # type: ignore[method-assign]
+        reader._write_debug = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+
+        snapshot = reader.read()
+
+        self.assertTrue(snapshot.has_data)
+        self.assertEqual(launches, [True])
+        self.assertFalse(reader._login_visible)
+
+    def test_hidden_session_recovery_does_not_delete_profile_state_or_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile_dir = root / "browser-profile"
+            profile_file = profile_dir / "Default" / "Local Storage" / "leveldb" / "session"
+            state_file = root / "overlay-state.json"
+            history_file = root / "usage-daily.json"
+            profile_file.parent.mkdir(parents=True)
+            profile_file.write_text("local session", encoding="utf-8")
+            state_file.write_text("{}", encoding="utf-8")
+            history_file.write_text("{}", encoding="utf-8")
+
+            reader = NeurogateUsageReader(BrowserSettings(headless=True, profile_dir=profile_dir))
+            reader._playwright = object()
+            reader._page = type("Page", (), {"url": reader.settings.usage_url})()
+            reader._current_headless = True
+            texts = iter(["EMAIL\nPASSWORD\nlogin", "dashboard"])
+
+            reader._wait_for_usage_text = lambda: next(texts)  # type: ignore[method-assign]
+            reader._launch_context = lambda *, headless: setattr(reader, "_current_headless", headless)  # type: ignore[method-assign]
+            reader._read_vibemode_api_snapshot = lambda text: UsageSnapshot(  # type: ignore[method-assign]
+                updated_at=datetime.now(),
+                windows=[UsageWindow(title="5 часов", credits_remaining=1)],
+            ) if text == "dashboard" else None
+            reader._hide_visible_browser_after_success = lambda: None  # type: ignore[method-assign]
+            reader._write_debug = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+
+            snapshot = reader.read()
+
+            self.assertTrue(snapshot.has_data)
+            self.assertTrue(profile_file.exists())
+            self.assertTrue(state_file.exists())
+            self.assertTrue(history_file.exists())
 
     def test_successful_read_allows_future_login_prompt(self):
         reader = NeurogateUsageReader(BrowserSettings(headless=True))

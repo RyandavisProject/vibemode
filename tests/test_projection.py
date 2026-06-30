@@ -3,6 +3,7 @@ import unittest
 
 from neurogate_usage_overlay.models import UsageSnapshot, UsageWindow
 from neurogate_usage_overlay.projection import (
+    find_window,
     parse_plan_remaining,
     projected_period_capacity,
     projected_spendable_credits,
@@ -18,6 +19,18 @@ RESET_4H = "4 \u0447"
 
 
 class ProjectionTest(unittest.TestCase):
+    def test_find_window_matches_localized_window_titles(self):
+        snapshot = UsageSnapshot(
+            updated_at=datetime.now(),
+            windows=[
+                UsageWindow(title="5 \u0447\u0430\u0441\u043e\u0432", credits_remaining=1),
+                UsageWindow(title="7 \u0434\u043d\u0435\u0439", credits_remaining=2),
+            ],
+        )
+
+        self.assertEqual(find_window(snapshot, "5h").credits_remaining, 1)
+        self.assertEqual(find_window(snapshot, "7d").credits_remaining, 2)
+
     def test_parse_plan_remaining(self):
         self.assertEqual(parse_plan_remaining(PLAN_2D_19H).total_seconds(), 67 * 60 * 60)
 

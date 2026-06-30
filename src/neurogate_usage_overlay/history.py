@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import json
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from .json_store import load_json_object, write_json_object_atomic
 from .models import UsageSnapshot, UsageWindow
 
 
@@ -18,14 +19,13 @@ def window_key(window: UsageWindow | None) -> str:
     if not window:
         return ""
     title = window.title.lower()
-    if "5" in title and "час" in title:
-        return "5h"
-    if "24" in title and "час" in title:
+    if re.search(r"(?<!\d)24(?!\d)", title):
         return "24h"
-    if "7" in title and "д" in title:
+    if re.search(r"(?<!\d)7(?!\d)", title):
         return "7d"
+    if re.search(r"(?<!\d)5(?!\d)", title):
+        return "5h"
     return title.strip()
-
 
 def find_window(snapshot: UsageSnapshot, key: str) -> UsageWindow | None:
     for window in snapshot.windows:
@@ -95,15 +95,10 @@ class DailyUsageStore:
         )
 
     def _load(self) -> dict[str, object]:
-        try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
-            return payload if isinstance(payload, dict) else {}
-        except Exception:
-            return {}
+        return load_json_object(self.path)
 
     def _save(self, payload: dict[str, object]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        write_json_object_atomic(self.path, payload)
 
     @staticmethod
     def _new_payload(today: str, remaining: int, first_seen_at: datetime) -> dict[str, object]:

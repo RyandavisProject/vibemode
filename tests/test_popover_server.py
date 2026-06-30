@@ -137,6 +137,12 @@ class PopoverServerTest(unittest.TestCase):
             base = f"http://127.0.0.1:{server.port}"
             token_query = parsed.query
 
+            with self.assertRaises(HTTPError) as denied_html:
+                urlopen(f"{base}/", timeout=2)
+            self.assertEqual(denied_html.exception.code, 403)
+            html = urlopen(f"{base}/?{token_query}", timeout=2).read().decode("utf-8")
+            self.assertIn("window.__NG_ACTION_TOKEN__", html)
+
             with self.assertRaises(HTTPError) as denied:
                 urlopen(f"{base}/data", timeout=2)
             self.assertEqual(denied.exception.code, 403)
@@ -147,6 +153,18 @@ class PopoverServerTest(unittest.TestCase):
             with self.assertRaises(HTTPError) as get_action:
                 urlopen(f"{base}/action/refresh?{token_query}", timeout=2)
             self.assertEqual(get_action.exception.code, 405)
+
+            with self.assertRaises(HTTPError) as denied_action:
+                urlopen(f"{base}/action/refresh", timeout=2)
+            self.assertEqual(denied_action.exception.code, 403)
+
+            with self.assertRaises(HTTPError) as denied_resize:
+                urlopen(f"{base}/resize/320", timeout=2)
+            self.assertEqual(denied_resize.exception.code, 403)
+
+            with self.assertRaises(HTTPError) as get_resize:
+                urlopen(f"{base}/resize/320?{token_query}", timeout=2)
+            self.assertEqual(get_resize.exception.code, 405)
 
             called = threading.Event()
             server.on_action("refresh", lambda _payload: called.set())
@@ -179,6 +197,44 @@ class PopoverServerTest(unittest.TestCase):
             self.assertEqual(urlopen(request, timeout=2).read(), b"ok")
             self.assertTrue(event.wait(1))
             self.assertEqual(seen, {"minutes": 5})
+        finally:
+            server.stop()
+
+    def test_popover_server_rejects_oversized_post_body_before_action(self) -> None:
+        server = PopoverServer()
+        try:
+            parsed = urlparse(server.get_url())
+            base = f"http://127.0.0.1:{server.port}"
+            token_query = parsed.query
+            called = threading.Event()
+            server.on_action("set_daily", lambda _payload: called.set())
+            request = Request(
+                f"{base}/action/set_daily?{token_query}",
+                data=b"{" + (b'"value":' + b'"' + b"x" * (20 * 1024) + b'"') + b"}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+
+            with self.assertRaises(HTTPError) as too_large:
+                urlopen(request, timeout=2)
+
+            self.assertEqual(too_large.exception.code, 413)
+            self.assertFalse(called.wait(0.1))
+        finally:
+            server.stop()
+
+    def test_popover_server_rejects_post_to_data_with_token_as_wrong_method(self) -> None:
+        server = PopoverServer()
+        try:
+            parsed = urlparse(server.get_url())
+            base = f"http://127.0.0.1:{server.port}"
+            token_query = parsed.query
+            request = Request(f"{base}/data?{token_query}", data=b"{}", method="POST")
+
+            with self.assertRaises(HTTPError) as wrong_method:
+                urlopen(request, timeout=2)
+
+            self.assertEqual(wrong_method.exception.code, 405)
         finally:
             server.stop()
 
