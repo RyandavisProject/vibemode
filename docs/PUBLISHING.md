@@ -2,6 +2,32 @@
 
 Use this checklist before sharing the overlay publicly.
 
+## 0. Owner Push Protocol
+
+When the owner asks to "push", "publish", "update GitHub", or "upload the
+version", do not treat it as only `git push main` if the change is a user-facing
+Vibemode version.
+
+A complete Vibemode push must account for every user installation path:
+
+- push `main`;
+- update the package version, README, and changelog when behavior changed;
+- verify Windows overlay behavior when Windows UI changed;
+- verify macOS-safe tests and keep macOS install/run scripts in the release;
+- build a fresh release ZIP with `scripts/package-release.ps1`;
+- verify the ZIP contains Windows and macOS install/run/update scripts;
+- verify the ZIP excludes `.venv`, `dist`, local state, browser profiles,
+  cookies, logs, secrets, and internal handoff/audit files;
+- publish or update the GitHub Release tag for that version;
+- attach both `vibemode-vX.Y.Z.zip` and `vibemode-vX.Y.Z.zip.sha256`;
+- confirm GitHub marks the new release as latest;
+- report which install paths are ready: Windows Git, Windows ZIP, macOS Git,
+  macOS ZIP, and in-app update.
+
+If the owner explicitly asks for code-only push or no release, say clearly that
+ZIP installs and in-app updates will not receive the new version until a GitHub
+Release with assets is published.
+
 ## 1. Remove Local Data
 
 Do not publish:
@@ -114,4 +140,3 @@ Suggested user command:
 Install Vibemode from this repository. Read docs/AI_INSTALL_PROMPT.md
 and follow it exactly.
 ```
-
