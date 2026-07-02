@@ -24,6 +24,7 @@ _TEMPLATE = """\
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { width: 100%; }
 
   body {
     --bg: rgba(246,247,250,0.96);
@@ -43,7 +44,7 @@ _TEMPLATE = """\
     background: var(--bg);
     color: var(--text);
     padding: 12px 14px 14px;
-    width: 280px;
+    width: 100%;
     -webkit-user-select: none;
   }
   body.theme-dark {

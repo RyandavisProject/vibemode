@@ -1,4 +1,4 @@
-# Vibemode Overlay 2.4
+# Vibemode Overlay 2.5
 
 Компактный desktop-overlay для лимитов Vibemode API. Работает локально на **Windows** и **macOS**, читает данные из кабинета Vibemode через локальную браузерную сессию Chrome/Playwright и показывает остатки, прогресс и время до сброса лимитов.
 
@@ -14,8 +14,8 @@
 
 <table>
   <tr>
-    <td><img src="docs/screenshots/overlay-tooltip.png" alt="Windows оверлей Vibemode Overlay 2.4" /></td>
-    <td><img src="docs/screenshots/overlay-menu.png" alt="Windows меню Vibemode Overlay 2.4" /></td>
+    <td><img src="docs/screenshots/overlay-tooltip.png" alt="Windows оверлей Vibemode Overlay 2.5" /></td>
+    <td><img src="docs/screenshots/overlay-menu.png" alt="Windows меню Vibemode Overlay 2.5" /></td>
   </tr>
   <tr>
     <td align="center">Windows overlay</td>
@@ -31,15 +31,12 @@
   </tr>
 </table>
 
-## Что нового в 2.4
+## Что нового в 2.5
 
-- Windows: прозрачные округлённые углы overlay на светлом и тёмном фоне.
-- Windows: аккуратнее 1x/2x UI, прогресс-бары, меню, tooltip и окно дневного лимита.
-- После сна overlay умеет восстановить hidden browser context без удаления профиля и без лишнего heartbeat.
-- Время сброса `5ч` и `7д` берётся из настоящих полей `/client/me`: `window5HoursEndsAt` и `window7DaysEndsAt`.
-- Автоподсказка дневного лимита больше не придумывает цифру, если нет реального времени сброса 7-дневного окна.
-- State/history пишутся атомарнее, popover server усилен token-защитой и лимитом POST body.
-- Проверки проекта расширены до `172 tests OK`.
+- macOS-версия проверена после последних правок: menu bar запускается, popover открывается, лимиты читаются из Vibemode API.
+- В macOS popover выровнена ширина контента: отступы слева и справа стали одинаковыми.
+- Время сброса `5ч` и `7д` продолжает браться из настоящих API-полей `/client/me`.
+- Проверки: `tests.test_popover_server`, `compileall`, live restart macOS menu bar.
 
 ## Установка
 
@@ -54,7 +51,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 ### Windows: из ZIP-архива
 
 1. Открой [Releases](https://github.com/RyandavisProject/vibemode/releases).
-2. Скачай `vibemode-v2.4.zip` из последнего релиза.
+2. Скачай `vibemode-v2.5.zip` из последнего релиза.
 3. Распакуй архив, например в `C:\Vibemode`.
 4. Запусти:
 
@@ -79,7 +76,7 @@ bash scripts/install.sh
 ### macOS: из ZIP-архива
 
 1. Открой [Releases](https://github.com/RyandavisProject/vibemode/releases).
-2. Скачай `vibemode-v2.4.zip` из последнего релиза.
+2. Скачай `vibemode-v2.5.zip` из последнего релиза.
 3. Распакуй архив и в папке проекта запусти:
 
 ```bash
@@ -139,6 +136,12 @@ python scripts\check-api-contract.py
 API-ключ, если используется для диагностики, вводится скрыто или через переменную окружения и не сохраняется проектом.
 
 ## История
+
+### 2.5 — 03-07-2026
+
+- macOS menu bar/popover проверен на рабочем запуске после последних правок.
+- Исправлена ширина macOS popover: контент занимает всё окно, отступы слева и справа одинаковые.
+- Подтверждено чтение лимитов и времени сброса через Vibemode API.
 
 ### 2.4 — 30-06-2026
 
