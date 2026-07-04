@@ -2,6 +2,23 @@
 
 Все заметные изменения проекта фиксируются здесь. Даты пишутся в формате `дд-мм-гггг`.
 
+## 2.6 — 04-07-2026
+
+### Изменено
+
+- macOS shortcut по умолчанию создаётся на рабочем столе как `Vibemode.command`.
+- Desktop-ярлык использует launch-only режим: если overlay уже запущен, он не перезапускает процесс и не трогает окно ЛК.
+
+### Исправлено
+
+- Первый login prompt больше не запускает лишний hidden session recovery перед входом.
+
+### Проверки
+
+- `tests.test_browser_reader tests.test_reader_worker`: OK.
+- `compileall src/neurogate_usage_overlay`: OK.
+- Проверен повторный запуск `Vibemode.command` при уже работающем overlay.
+
 ## 2.5 — 03-07-2026
 
 ### Исправлено

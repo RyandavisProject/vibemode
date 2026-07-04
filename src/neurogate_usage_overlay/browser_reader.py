@@ -162,6 +162,7 @@ class NeurogateUsageReader:
         self._login_visible = False
         self._login_prompt_opened = False
         self._account_switch_pending = False
+        self._has_successful_snapshot = False
         self._last_hidden_session_recovery_at: float | None = None
         self._last_vibemode_api_failure_reason: str | None = None
 
@@ -388,6 +389,7 @@ class NeurogateUsageReader:
             if not self._is_vibemode_url(self._page.url):
                 self._attach_window_progress(snapshot)
         if snapshot.has_data:
+            self._has_successful_snapshot = True
             self._login_prompt_opened = False
             self._login_visible = False
             self._account_switch_pending = False
@@ -436,6 +438,8 @@ class NeurogateUsageReader:
         if self._playwright is None or not self.settings.headless:
             return None
         if self._account_switch_pending:
+            return None
+        if not force_session_recovery and not self._has_successful_snapshot:
             return None
         last_recovery = self._last_hidden_session_recovery_at
         if (
@@ -501,6 +505,7 @@ class NeurogateUsageReader:
         self._login_prompt_opened = True
         self._login_visible = True
         self._account_switch_pending = True
+        self._has_successful_snapshot = False
         if not self._playwright:
             self.start()
             self._close_context()

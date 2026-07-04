@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Creates a macOS .app launcher in ~/Applications (or a custom directory)
-# so the overlay can be launched from Finder / Launchpad / Spotlight.
+# Creates a macOS launcher on Desktop by default, or in a custom directory.
 set -euo pipefail
 
 SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,10 +16,25 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$SHORTCUT_DIR" ]]; then
-    SHORTCUT_DIR="$HOME/Applications"
+    SHORTCUT_DIR="$HOME/Desktop"
 fi
 
 mkdir -p "$SHORTCUT_DIR"
+
+if [[ "$(cd "$SHORTCUT_DIR" && pwd)" == "$(cd "$HOME/Desktop" && pwd)" ]]; then
+    COMMAND_PATH="$SHORTCUT_DIR/${SHORTCUT_NAME}.command"
+    cat > "$COMMAND_PATH" <<COMMAND
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$ROOT"
+export VIBEMODE_LAUNCH_ONLY=1
+exec bash scripts/run-overlay.sh
+COMMAND
+    chmod +x "$COMMAND_PATH"
+    echo "Desktop launcher created: $COMMAND_PATH"
+    echo "Double-click it to start Vibemode. If it is already running, it will not restart."
+    exit 0
+fi
 
 APP_PATH="$SHORTCUT_DIR/${SHORTCUT_NAME}.app"
 MACOS_DIR="$APP_PATH/Contents/MacOS"
@@ -63,6 +77,7 @@ PROJECT_ROOT_QUOTED="$(printf '%q' "$ROOT")"
 cat > "$MACOS_DIR/launch" <<LAUNCH
 #!/usr/bin/env bash
 ROOT=$PROJECT_ROOT_QUOTED
+export VIBEMODE_LAUNCH_ONLY=1
 exec bash "\$ROOT/scripts/run-overlay.sh"
 LAUNCH
 

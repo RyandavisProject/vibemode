@@ -1,4 +1,4 @@
-# Vibemode Overlay 2.5
+# Vibemode Overlay 2.6
 
 Компактный desktop-overlay для лимитов Vibemode API. Работает локально на **Windows** и **macOS**, читает данные из кабинета Vibemode через локальную браузерную сессию Chrome/Playwright и показывает остатки, прогресс и время до сброса лимитов.
 
@@ -14,8 +14,8 @@
 
 <table>
   <tr>
-    <td><img src="docs/screenshots/overlay-tooltip.png" alt="Windows оверлей Vibemode Overlay 2.5" /></td>
-    <td><img src="docs/screenshots/overlay-menu.png" alt="Windows меню Vibemode Overlay 2.5" /></td>
+    <td><img src="docs/screenshots/overlay-tooltip.png" alt="Windows оверлей Vibemode Overlay 2.6" /></td>
+    <td><img src="docs/screenshots/overlay-menu.png" alt="Windows меню Vibemode Overlay 2.6" /></td>
   </tr>
   <tr>
     <td align="center">Windows overlay</td>
@@ -31,12 +31,12 @@
   </tr>
 </table>
 
-## Что нового в 2.5
+## Что нового в 2.6
 
-- macOS-версия проверена после последних правок: menu bar запускается, popover открывается, лимиты читаются из Vibemode API.
-- В macOS popover выровнена ширина контента: отступы слева и справа стали одинаковыми.
-- Время сброса `5ч` и `7д` продолжает браться из настоящих API-полей `/client/me`.
-- Проверки: `tests.test_popover_server`, `compileall`, live restart macOS menu bar.
+- macOS: установка из Git/ZIP создаёт `Vibemode.command` на рабочем столе.
+- Повторный запуск desktop-ярлыка больше не перезапускает overlay и не переоткрывает ЛК.
+- Первый login prompt больше не запускает лишний hidden recovery перед входом.
+- Проверки: `tests.test_browser_reader`, `tests.test_reader_worker`, `compileall`.
 
 ## Установка
 
@@ -51,7 +51,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 ### Windows: из ZIP-архива
 
 1. Открой [Releases](https://github.com/RyandavisProject/vibemode/releases).
-2. Скачай `vibemode-v2.5.zip` из последнего релиза.
+2. Скачай `vibemode-v2.6.zip` из последнего релиза.
 3. Распакуй архив, например в `C:\Vibemode`.
 4. Запусти:
 
@@ -73,15 +73,19 @@ cd vibemode
 bash scripts/install.sh
 ```
 
+Установка создаёт ярлык `Vibemode.command` на рабочем столе. Если overlay уже запущен, повторный запуск ярлыка не перезапускает ЛК.
+
 ### macOS: из ZIP-архива
 
 1. Открой [Releases](https://github.com/RyandavisProject/vibemode/releases).
-2. Скачай `vibemode-v2.5.zip` из последнего релиза.
+2. Скачай `vibemode-v2.6.zip` из последнего релиза.
 3. Распакуй архив и в папке проекта запусти:
 
 ```bash
 bash scripts/install.sh
 ```
+
+После установки на рабочем столе появится `Vibemode.command`.
 
 Запуск:
 
@@ -136,6 +140,12 @@ python scripts\check-api-contract.py
 API-ключ, если используется для диагностики, вводится скрыто или через переменную окружения и не сохраняется проектом.
 
 ## История
+
+### 2.6 — 04-07-2026
+
+- macOS installer теперь создаёт `Vibemode.command` на рабочем столе.
+- Desktop-ярлык запускает overlay в режиме без перезапуска уже работающей копии.
+- Убрано лишнее hidden recovery на первом login prompt, чтобы ЛК не открывался повторно.
 
 ### 2.5 — 03-07-2026
 

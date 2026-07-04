@@ -8,6 +8,7 @@ VENV_PYTHON="$VENV/bin/python"
 STATE_DIR="$HOME/.neurogate-usage-overlay"
 PROFILE_PATH="$STATE_DIR/browser-profile"
 PID_FILE="$STATE_DIR/overlay.pid"
+LAUNCH_ONLY="${VIBEMODE_LAUNCH_ONLY:-0}"
 
 # Install if venv is missing.
 if [[ ! -f "$VENV_PYTHON" ]]; then
@@ -15,8 +16,15 @@ if [[ ! -f "$VENV_PYTHON" ]]; then
     bash "$SCRIPTS_DIR/install.sh"
 fi
 
+if [[ "$LAUNCH_ONLY" == "1" ]]; then
+    if pgrep -f '[p]ython.*-m[[:space:]]+neurogate_usage_overlay' >/dev/null; then
+        echo "Vibemode overlay is already running."
+        exit 0
+    fi
+fi
+
 # Stop a previously recorded overlay instance.
-if [[ -f "$PID_FILE" ]]; then
+if [[ "$LAUNCH_ONLY" != "1" && -f "$PID_FILE" ]]; then
     RECORDED_PID="$(cat "$PID_FILE" 2>/dev/null | tr -d '[:space:]')"
     if [[ -n "$RECORDED_PID" ]] && kill -0 "$RECORDED_PID" 2>/dev/null; then
         CMDLINE="$(ps -p "$RECORDED_PID" -o args= 2>/dev/null || true)"
@@ -33,13 +41,17 @@ fi
 _self_pids="$$"
 [[ -n "${PPID:-}" ]] && _self_pids="$$|$PPID"
 
-pgrep -f '[p]ython.*-m[[:space:]]+neurogate_usage_overlay' \
-    | grep -Ev "^($_self_pids)$" \
-    | while read -r pid; do kill "$pid" 2>/dev/null || true; done || true
+if [[ "$LAUNCH_ONLY" != "1" ]]; then
+    pgrep -f '[p]ython.*-m[[:space:]]+neurogate_usage_overlay' \
+        | grep -Ev "^($_self_pids)$" \
+        | while read -r pid; do kill "$pid" 2>/dev/null || true; done || true
+fi
 
-pgrep -f "$PROFILE_PATH" \
-    | grep -Ev "^($_self_pids)$" \
-    | while read -r pid; do kill "$pid" 2>/dev/null || true; done || true
+if [[ "$LAUNCH_ONLY" != "1" ]]; then
+    pgrep -f "$PROFILE_PATH" \
+        | grep -Ev "^($_self_pids)$" \
+        | while read -r pid; do kill "$pid" 2>/dev/null || true; done || true
+fi
 
 unset _self_pids
 

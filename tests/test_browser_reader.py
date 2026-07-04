@@ -418,6 +418,7 @@ class BrowserReaderModeTest(unittest.TestCase):
         reader._playwright = object()
         reader._page = type("Page", (), {"url": reader.settings.usage_url})()
         reader._current_headless = True
+        reader._has_successful_snapshot = True
         texts = iter(["EMAIL\nPASSWORD\nlogin", "dashboard"])
         launches: list[bool] = []
         opened_visible: list[bool] = []
@@ -451,11 +452,37 @@ class BrowserReaderModeTest(unittest.TestCase):
         self.assertTrue(any("hidden_session_recovery_start" in note for note in debug_notes))
         self.assertTrue(any("outcome=recovered" in note for note in debug_notes))
 
+    def test_initial_hidden_login_prompt_does_not_relaunch_before_visible_prompt(self):
+        reader = NeurogateUsageReader(BrowserSettings(headless=True))
+        reader._playwright = object()
+        reader._page = type("Page", (), {"url": reader.settings.usage_url})()
+        reader._current_headless = True
+        launches: list[bool] = []
+        opened_visible: list[bool] = []
+
+        def open_visible_login_window() -> None:
+            opened_visible.append(True)
+            reader._current_headless = False
+            reader._login_visible = True
+
+        reader._wait_for_usage_text = lambda: "EMAIL\nPASSWORD\nlogin"  # type: ignore[method-assign]
+        reader._launch_context = lambda *, headless: launches.append(headless)  # type: ignore[method-assign]
+        reader._open_visible_login_window = open_visible_login_window  # type: ignore[method-assign]
+        reader._maybe_auto_submit_login = lambda: False  # type: ignore[method-assign]
+        reader._write_debug = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+
+        snapshot = reader.read()
+
+        self.assertFalse(snapshot.has_data)
+        self.assertEqual(launches, [])
+        self.assertEqual(opened_visible, [True])
+
     def test_hidden_missing_api_token_after_sleep_recovers_context_before_login_prompt(self):
         reader = NeurogateUsageReader(BrowserSettings(headless=True))
         reader._playwright = object()
         reader._page = type("Page", (), {"url": reader.settings.usage_url})()
         reader._current_headless = True
+        reader._has_successful_snapshot = True
         texts = iter(["dashboard shell", "dashboard recovered"])
         launches: list[bool] = []
         opened_visible: list[bool] = []
@@ -492,6 +519,7 @@ class BrowserReaderModeTest(unittest.TestCase):
         reader._playwright = object()
         reader._page = type("Page", (), {"url": reader.settings.usage_url})()
         reader._current_headless = True
+        reader._has_successful_snapshot = True
         texts = iter(["could not load cabinet data.", "dashboard"])
         launches: list[bool] = []
         opened_visible: list[bool] = []
@@ -523,6 +551,7 @@ class BrowserReaderModeTest(unittest.TestCase):
         reader._playwright = object()
         reader._page = type("Page", (), {"url": reader.settings.usage_url})()
         reader._current_headless = True
+        reader._has_successful_snapshot = True
         texts = iter(["session expired", "dashboard"])
         launches: list[bool] = []
         opened_visible: list[bool] = []
@@ -554,6 +583,7 @@ class BrowserReaderModeTest(unittest.TestCase):
         reader._playwright = object()
         reader._page = type("Page", (), {"url": reader.settings.usage_url})()
         reader._current_headless = True
+        reader._has_successful_snapshot = True
         texts = iter([
             "EMAIL\nPASSWORD\nlogin",
             "EMAIL\nPASSWORD\nlogin",
@@ -648,6 +678,7 @@ class BrowserReaderModeTest(unittest.TestCase):
         reader._page = type("Page", (), {"url": reader.settings.usage_url})()
         reader._current_headless = False
         reader._login_visible = True
+        reader._has_successful_snapshot = True
         texts = iter(["EMAIL\nPASSWORD\nlogin", "dashboard"])
         launches: list[bool] = []
 
@@ -688,6 +719,7 @@ class BrowserReaderModeTest(unittest.TestCase):
             reader._playwright = object()
             reader._page = type("Page", (), {"url": reader.settings.usage_url})()
             reader._current_headless = True
+            reader._has_successful_snapshot = True
             texts = iter(["EMAIL\nPASSWORD\nlogin", "dashboard"])
 
             reader._wait_for_usage_text = lambda: next(texts)  # type: ignore[method-assign]
