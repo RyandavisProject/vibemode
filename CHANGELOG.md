@@ -8,14 +8,18 @@
 
 - macOS shortcut по умолчанию создаётся на рабочем столе как `Vibemode.command`.
 - Desktop-ярлык использует launch-only режим: если overlay уже запущен, он не перезапускает процесс и не трогает окно ЛК.
+- Sleep/wake recovery для Windows и macOS вынесен на нативные события питания и общий coordinator.
 
 ### Исправлено
 
 - Первый login prompt больше не запускает лишний hidden session recovery перед входом.
+- Overlay больше не заменяет последние хорошие лимиты неполным snapshot-ом после сна или зависшего refresh.
+- Дневной расход больше не сбрасывается в `0`, когда 7-дневное окно расширяется и общий used-счётчик меняется вниз.
 
 ### Проверки
 
-- `tests.test_browser_reader tests.test_reader_worker`: OK.
+- `scripts/check.ps1`: OK.
+- `tests.test_browser_reader tests.test_reader_worker tests.test_overlay tests.test_history tests.test_resume_recovery tests.test_power_events`: OK.
 - `compileall src/neurogate_usage_overlay`: OK.
 - Проверен повторный запуск `Vibemode.command` при уже работающем overlay.
 

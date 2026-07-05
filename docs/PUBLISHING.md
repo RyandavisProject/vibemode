@@ -17,9 +17,9 @@ The in-app update checker reads only:
 https://api.github.com/repos/RyandavisProject/vibemode/releases/latest
 ```
 
-If `releases/latest` returns `v2.4`, then a running `2.4` overlay is correct to
-show no update, even if `main`, a local machine, or README already mentions
-`2.5`.
+If `releases/latest` returns `vX.Y`, then a running `X.Y` overlay is correct to
+show no update, even if `main`, a local machine, or README already mentions a
+newer version.
 
 A public update exists only when all of these are true:
 
