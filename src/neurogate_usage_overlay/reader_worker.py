@@ -6,7 +6,7 @@ from concurrent.futures import Future, TimeoutError
 from dataclasses import replace
 from typing import Any
 
-from .browser_reader import BrowserSettings, NeurogateUsageReader
+from .browser_reader import BrowserSettings, NeurogateUsageReader, terminate_profile_browser_processes
 from .models import UsageSnapshot
 
 
@@ -128,6 +128,7 @@ class ThreadedUsageReader:
             if timed_out_queue is not self._commands:
                 return
             self._retire_command_queue(timed_out_queue, name)
+            terminate_profile_browser_processes(self._settings.profile_dir)
             self._start_worker()
 
     def _retire_command_queue(self, command_queue: queue.Queue[WorkerCommand], timed_out_name: str) -> None:

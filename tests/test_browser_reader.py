@@ -13,6 +13,7 @@ from neurogate_usage_overlay.browser_reader import (
     USAGE_URL,
     BrowserSettings,
     NeurogateUsageReader,
+    command_line_uses_profile,
     _format_plan_days_left,
     _snapshot_from_vibemode_api,
     _snapshot_from_vibemode_text,
@@ -23,6 +24,54 @@ from neurogate_usage_overlay.models import UsageSnapshot, UsageWindow
 class BrowserReaderModeTest(unittest.TestCase):
     def test_default_usage_url_points_to_vibemode_dashboard(self):
         self.assertEqual(USAGE_URL, "https://portal.vibemod.pro/client")
+
+    def test_profile_process_match_requires_exact_user_data_dir(self):
+        with tempfile.TemporaryDirectory() as directory:
+            profile = Path(directory) / "browser-profile"
+            profile.mkdir()
+
+            self.assertTrue(command_line_uses_profile(f'chrome --user-data-dir="{profile}"', profile))
+            self.assertTrue(command_line_uses_profile(f"chrome --user-data-dir={profile}", profile))
+            self.assertFalse(command_line_uses_profile(f"chrome --user-data-dir={profile}-old", profile))
+            self.assertFalse(command_line_uses_profile("chrome --profile-directory=Default", profile))
+
+    def test_launch_context_retries_after_profile_browser_cleanup(self):
+        class FakePage:
+            url = USAGE_URL
+
+            def set_default_timeout(self, _timeout):
+                return None
+
+            def goto(self, *_args, **_kwargs):
+                return None
+
+        class FakeContext:
+            pages = [FakePage()]
+
+        class FakeChromium:
+            def __init__(self):
+                self.calls = 0
+
+            def launch_persistent_context(self, **_kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    raise RuntimeError("Target page, context or browser has been closed")
+                return FakeContext()
+
+        class FakePlaywright:
+            def __init__(self):
+                self.chromium = FakeChromium()
+
+        with tempfile.TemporaryDirectory() as directory:
+            reader = NeurogateUsageReader(BrowserSettings(profile_dir=Path(directory) / "browser-profile"))
+            reader._playwright = FakePlaywright()
+            reader._write_debug = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+            reader._hide_hidden_browser_taskbar_windows = lambda: 0  # type: ignore[method-assign]
+
+            with patch("neurogate_usage_overlay.browser_reader.terminate_profile_browser_processes", return_value=1):
+                reader._launch_context(headless=True)
+
+            self.assertEqual(reader._playwright.chromium.calls, 2)
 
     def test_format_plan_days_left_uses_ceiling_days(self):
         now = datetime(2026, 6, 25, 6, 0, tzinfo=timezone.utc)

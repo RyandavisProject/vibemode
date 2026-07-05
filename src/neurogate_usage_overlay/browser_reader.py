@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import signal
 import shutil
 import subprocess
@@ -46,41 +47,89 @@ CACHE_SIZE_BYTES = 16 * 1024 * 1024
 PROFILE_BROWSER_TERMINATION_TIMEOUT_SECONDS = 1.5
 
 
-def terminate_profile_browser_processes(
-    profile_dir: Path,
-    *,
-    timeout_seconds: float = PROFILE_BROWSER_TERMINATION_TIMEOUT_SECONDS,
-) -> int:
-    """Terminate macOS Chrome processes that belong to the overlay profile only."""
-    if sys.platform != "darwin":
-        return 0
+def command_line_uses_profile(command: str, profile_dir: Path) -> bool:
+    normalized_profile = str(profile_dir.resolve()).replace("\\", "/").lower()
+    if not normalized_profile:
+        return False
+    for match in re.finditer(r"--user-data-dir=(?:\"([^\"]+)\"|'([^']+)'|(\S+))", command, flags=re.IGNORECASE):
+        value = next(group for group in match.groups() if group is not None)
+        normalized_value = value.rstrip("\"'").replace("\\", "/").lower()
+        if normalized_value == normalized_profile:
+            return True
+    return False
+
+
+def _profile_browser_process_ids_windows(profile_dir: Path) -> set[int]:
     try:
-        needle = str(profile_dir.resolve())
         result = subprocess.run(
-            ["ps", "-axo", "pid=,command="],
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                (
+                    "Get-CimInstance Win32_Process "
+                    "-Filter \"Name = 'chrome.exe' OR Name = 'msedge.exe'\" | "
+                    "ForEach-Object { \"$($_.ProcessId)`t$($_.CommandLine)\" }"
+                ),
+            ],
             check=False,
             capture_output=True,
             text=True,
             timeout=3,
         )
     except Exception:
-        return 0
-
-    current_pid = os.getpid()
+        return set()
     pids: set[int] = set()
     for line in result.stdout.splitlines():
         try:
-            pid_text, command = line.strip().split(None, 1)
-            pid = int(pid_text)
+            pid_text, command = line.split("\t", 1)
+            pid = int(pid_text.strip())
         except ValueError:
             continue
-        if pid == current_pid or needle not in command:
-            continue
-        pids.add(pid)
+        if command_line_uses_profile(command, profile_dir):
+            pids.add(pid)
+    return pids
+
+
+def terminate_profile_browser_processes(
+    profile_dir: Path,
+    *,
+    timeout_seconds: float = PROFILE_BROWSER_TERMINATION_TIMEOUT_SECONDS,
+) -> int:
+    """Terminate browser processes that belong to the overlay profile only."""
+    pids: set[int] = set()
+    if sys.platform.startswith("win"):
+        pids = _profile_browser_process_ids_windows(profile_dir)
+    elif sys.platform == "darwin":
+        try:
+            result = subprocess.run(
+                ["ps", "-axo", "pid=,command="],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+        except Exception:
+            return 0
+        current_pid = os.getpid()
+        for line in result.stdout.splitlines():
+            try:
+                pid_text, command = line.strip().split(None, 1)
+                pid = int(pid_text)
+            except ValueError:
+                continue
+            if pid == current_pid or not command_line_uses_profile(command, profile_dir):
+                continue
+            pids.add(pid)
+    else:
+        return 0
 
     for pid in pids:
         try:
-            os.kill(pid, signal.SIGTERM)
+            if sys.platform.startswith("win"):
+                os.kill(pid, signal.SIGTERM)
+            else:
+                os.kill(pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
         except Exception:
@@ -97,7 +146,10 @@ def terminate_profile_browser_processes(
         if not _process_is_alive(pid):
             continue
         try:
-            os.kill(pid, signal.SIGKILL)
+            if sys.platform.startswith("win"):
+                os.kill(pid, signal.SIGTERM)
+            else:
+                os.kill(pid, signal.SIGKILL)
         except Exception:
             pass
     return len(pids)
@@ -185,17 +237,17 @@ class NeurogateUsageReader:
         assert self._playwright is not None
         self._close_context()
         args = self._browser_args(hidden=headless)
-        self._context = self._playwright.chromium.launch_persistent_context(
-            user_data_dir=str(self.settings.profile_dir),
-            channel=self.settings.browser_channel,
-            # The portal behaves differently in true headless mode and can
-            # intermittently lose tariff data. Hidden mode uses headed Chrome
-            # offscreen so the session stays equivalent to the user's browser.
-            headless=False,
-            ignore_default_args=["--no-sandbox"],
-            viewport={"width": 1440, "height": 950},
-            args=args,
-        )
+        try:
+            self._context = self._launch_persistent_context(args)
+        except Exception as exc:
+            killed = terminate_profile_browser_processes(self.settings.profile_dir)
+            if not killed or not self._is_recoverable_launch_error(exc):
+                raise
+            self._write_debug(
+                parse_usage_text("", source_url=self.settings.usage_url),
+                note=f"profile_browser_terminated_after_launch_error count={killed}",
+            )
+            self._context = self._launch_persistent_context(args)
         self._current_headless = headless
         self._login_visible = False
         if self._context.pages:
@@ -206,6 +258,34 @@ class NeurogateUsageReader:
         self._page.goto(self.settings.usage_url, wait_until="domcontentloaded")
         if headless:
             self._hide_hidden_browser_taskbar_windows()
+
+    def _launch_persistent_context(self, args: list[str]):
+        assert self._playwright is not None
+        return self._playwright.chromium.launch_persistent_context(
+            user_data_dir=str(self.settings.profile_dir),
+            channel=self.settings.browser_channel,
+            # The portal behaves differently in true headless mode and can
+            # intermittently lose tariff data. Hidden mode uses headed Chrome
+            # offscreen so the session stays equivalent to the user's browser.
+            headless=False,
+            ignore_default_args=["--no-sandbox"],
+            viewport={"width": 1440, "height": 950},
+            args=args,
+        )
+
+    @staticmethod
+    def _is_recoverable_launch_error(error: Exception) -> bool:
+        text = repr(error).lower()
+        return any(
+            marker in text
+            for marker in (
+                "target page, context or browser has been closed",
+                "profile",
+                "user data directory",
+                "process singleton",
+                "failed to create",
+            )
+        )
 
     def _browser_args(self, hidden: bool) -> list[str]:
         args = [

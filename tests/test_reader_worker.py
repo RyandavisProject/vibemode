@@ -86,6 +86,7 @@ class ThreadedUsageReaderTest(unittest.TestCase):
         reader._worker_lock = threading.Lock()
         reader._future_queues = {}
         reader._enqueue = lambda *_args: future  # type: ignore[method-assign]
+        reader._restart_worker_after_timeout = lambda *_args: None  # type: ignore[method-assign]
 
         with patch("neurogate_usage_overlay.reader_worker.WORKER_CALL_TIMEOUT_SECONDS", 0.01):
             with self.assertRaisesRegex(RuntimeError, "timed out"):
@@ -102,6 +103,21 @@ class ThreadedUsageReaderTest(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "queue is full"):
             reader._enqueue("refresh")
+
+    def test_worker_timeout_terminates_profile_browser_processes(self):
+        reader = ThreadedUsageReader.__new__(ThreadedUsageReader)
+        reader._settings = BrowserSettings()
+        reader._commands = queue.Queue()
+        reader._worker_lock = threading.Lock()
+        future: Future = Future()
+        reader._future_queues = {future: reader._commands}
+        reader._retire_command_queue = lambda *_args: None  # type: ignore[method-assign]
+        reader._start_worker = lambda: None  # type: ignore[method-assign]
+
+        with patch("neurogate_usage_overlay.reader_worker.terminate_profile_browser_processes") as terminate:
+            reader._restart_worker_after_timeout("refresh", future)
+
+        terminate.assert_called_once_with(reader._settings.profile_dir)
 
     def test_worker_recovers_after_hung_preload_refresh(self):
         release_first_refresh = threading.Event()
@@ -139,22 +155,23 @@ class ThreadedUsageReaderTest(unittest.TestCase):
 
         with patch("neurogate_usage_overlay.reader_worker.NeurogateUsageReader", FakeReader):
             with patch("neurogate_usage_overlay.reader_worker.WORKER_CALL_TIMEOUT_SECONDS", 0.01):
-                reader = ThreadedUsageReader(BrowserSettings())
-                try:
-                    with self.assertRaisesRegex(RuntimeError, "timed out: refresh"):
-                        reader.refresh()
+                with patch("neurogate_usage_overlay.reader_worker.terminate_profile_browser_processes"):
+                    reader = ThreadedUsageReader(BrowserSettings())
+                    try:
+                        with self.assertRaisesRegex(RuntimeError, "timed out: refresh"):
+                            reader.refresh()
 
-                    deadline = time.monotonic() + 1
-                    while len(created) < 2 and time.monotonic() < deadline:
-                        time.sleep(0.01)
+                        deadline = time.monotonic() + 1
+                        while len(created) < 2 and time.monotonic() < deadline:
+                            time.sleep(0.01)
 
-                    snapshot = reader.refresh()
-                    self.assertEqual(snapshot.windows[0].title, "recovered")
-                    self.assertEqual(snapshot.windows[0].credits_remaining, 2)
-                finally:
-                    reader.stop()
-                    release_first_refresh.set()
-                    self.assertTrue(first_stopped.wait(1))
+                        snapshot = reader.refresh()
+                        self.assertEqual(snapshot.windows[0].title, "recovered")
+                        self.assertEqual(snapshot.windows[0].credits_remaining, 2)
+                    finally:
+                        reader.stop()
+                        release_first_refresh.set()
+                        self.assertTrue(first_stopped.wait(1))
 
     def test_worker_restart_after_timeout_preserves_force_session_recovery(self):
         release_first_refresh = threading.Event()
@@ -191,23 +208,24 @@ class ThreadedUsageReaderTest(unittest.TestCase):
 
         with patch("neurogate_usage_overlay.reader_worker.NeurogateUsageReader", FakeReader):
             with patch("neurogate_usage_overlay.reader_worker.WORKER_CALL_TIMEOUT_SECONDS", 0.01):
-                reader = ThreadedUsageReader(BrowserSettings())
-                try:
-                    with self.assertRaisesRegex(RuntimeError, "timed out: refresh"):
-                        reader.refresh()
+                with patch("neurogate_usage_overlay.reader_worker.terminate_profile_browser_processes"):
+                    reader = ThreadedUsageReader(BrowserSettings())
+                    try:
+                        with self.assertRaisesRegex(RuntimeError, "timed out: refresh"):
+                            reader.refresh()
 
-                    deadline = time.monotonic() + 1
-                    while len(created) < 2 and time.monotonic() < deadline:
-                        time.sleep(0.01)
+                        deadline = time.monotonic() + 1
+                        while len(created) < 2 and time.monotonic() < deadline:
+                            time.sleep(0.01)
 
-                    snapshot = reader.refresh(force_session_recovery=True)
-                    self.assertEqual(snapshot.windows[0].title, "recovered")
-                    self.assertEqual(snapshot.windows[0].credits_remaining, 3)
-                    self.assertEqual(force_calls, [True])
-                finally:
-                    reader.stop()
-                    release_first_refresh.set()
-                    self.assertTrue(first_stopped.wait(1))
+                        snapshot = reader.refresh(force_session_recovery=True)
+                        self.assertEqual(snapshot.windows[0].title, "recovered")
+                        self.assertEqual(snapshot.windows[0].credits_remaining, 3)
+                        self.assertEqual(force_calls, [True])
+                    finally:
+                        reader.stop()
+                        release_first_refresh.set()
+                        self.assertTrue(first_stopped.wait(1))
 
     def test_worker_restart_preserves_keep_browser_open_setting(self):
         release_first_refresh = threading.Event()
@@ -234,22 +252,23 @@ class ThreadedUsageReaderTest(unittest.TestCase):
 
         with patch("neurogate_usage_overlay.reader_worker.NeurogateUsageReader", FakeReader):
             with patch("neurogate_usage_overlay.reader_worker.WORKER_CALL_TIMEOUT_SECONDS", 0.01):
-                reader = ThreadedUsageReader(BrowserSettings(headless=True))
-                try:
-                    with self.assertRaisesRegex(RuntimeError, "timed out: set_keep_browser_open"):
-                        reader.set_keep_browser_open(True)
+                with patch("neurogate_usage_overlay.reader_worker.terminate_profile_browser_processes"):
+                    reader = ThreadedUsageReader(BrowserSettings(headless=True))
+                    try:
+                        with self.assertRaisesRegex(RuntimeError, "timed out: set_keep_browser_open"):
+                            reader.set_keep_browser_open(True)
 
-                    deadline = time.monotonic() + 1
-                    while len(created) < 2 and time.monotonic() < deadline:
-                        time.sleep(0.01)
+                        deadline = time.monotonic() + 1
+                        while len(created) < 2 and time.monotonic() < deadline:
+                            time.sleep(0.01)
 
-                    self.assertGreaterEqual(len(created), 2)
-                    self.assertFalse(created[-1].settings.headless)
-                    self.assertTrue(created[-1].settings.show_browser_on_login)
-                    self.assertFalse(created[-1].settings.hide_after_successful_login)
-                finally:
-                    reader.stop()
-                    release_first_refresh.set()
+                        self.assertGreaterEqual(len(created), 2)
+                        self.assertFalse(created[-1].settings.headless)
+                        self.assertTrue(created[-1].settings.show_browser_on_login)
+                        self.assertFalse(created[-1].settings.hide_after_successful_login)
+                    finally:
+                        reader.stop()
+                        release_first_refresh.set()
 
 
 if __name__ == "__main__":

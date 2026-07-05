@@ -15,8 +15,11 @@ from . import __version__
 from .history import DailyUsageStore, find_window, spent_since_reset, window_key
 from .json_store import load_json_object, update_json_object_atomic
 from .log_utils import append_bounded_log
+from .macos_power import install_macos_power_observer
 from .models import UsageSnapshot, UsageWindow
+from .resume_recovery import ResumeRefreshCoordinator
 from .update_checker import UpdateInfo, check_for_update
+from .win32_power import install_win32_power_broadcast_handler
 from .win32_window import apply_rounded_window_region, configure_rounded_window_background
 
 
@@ -24,6 +27,155 @@ SnapshotReader = Callable[[], UsageSnapshot]
 KeepBrowserGetter = Callable[[], bool]
 KeepBrowserSetter = Callable[[bool], None]
 AccountResetter = Callable[[], None]
+
+
+class _ResumeRecoveryOverlayMixin:
+    STALE_REFRESH_SECONDS: int
+    refreshing: bool
+    last_refresh_at: datetime | None
+
+    def _resume_recovery(self) -> ResumeRefreshCoordinator:
+        legacy_state = getattr(self, "resume_recovery_state", None)
+        coordinator = getattr(self, "resume_recovery", None)
+        if isinstance(legacy_state, ResumeRefreshCoordinator) and legacy_state is not coordinator:
+            coordinator = legacy_state
+        if coordinator is None:
+            coordinator = ResumeRefreshCoordinator(getattr(self, "STALE_REFRESH_SECONDS", 120))
+        self.resume_recovery = coordinator
+        self.resume_recovery_state = coordinator
+        return coordinator
+
+    def _sync_resume_recovery_aliases(self) -> None:
+        coordinator = self._resume_recovery()
+        self.refresh_started_at = coordinator.refresh_started_at
+        self.refresh_generation = coordinator.refresh_generation
+        self.resume_recovery_pending = coordinator.resume_recovery_pending
+
+    def _begin_refresh_tracking(self, now: datetime) -> int:
+        generation = self._resume_recovery().begin_refresh(now)
+        self._sync_resume_recovery_aliases()
+        return generation
+
+    def _finish_refresh_tracking(self, generation: int | None) -> bool:
+        accepted = self._resume_recovery().finish_refresh(generation)
+        self._sync_resume_recovery_aliases()
+        if not accepted:
+            self._write_ui_log(f"stale_refresh_result_ignored generation={generation}")
+        return accepted
+
+    def _log_abandoned_refresh(self, reason: str, generation: int) -> None:
+        self.refreshing = False
+        self._write_ui_log(f"stale_refresh_abandoned reason={reason} generation={generation}")
+
+    def _abandon_active_refresh(self, reason: str) -> None:
+        stale_generation = self._resume_recovery().abandon_active_refresh()
+        self._sync_resume_recovery_aliases()
+        self._log_abandoned_refresh(reason, stale_generation)
+
+    def request_resume_recovery(self, reason: str) -> None:
+        now = datetime.now().astimezone()
+        decision = self._resume_recovery().request_resume_recovery(now, self.refreshing)
+        self._sync_resume_recovery_aliases()
+        self.last_refresh_at = None
+        self._write_ui_log(f"resume_recovery_requested reason={reason}")
+        if decision.abandoned_generation is not None:
+            self._log_abandoned_refresh(reason, decision.abandoned_generation)
+        if decision.wait_for_active_refresh:
+            self._write_ui_log(f"resume_recovery_waiting_for_active_refresh reason={reason}")
+            return
+        if decision.start_refresh:
+            self.refresh(force=True)
+
+    def _can_start_forced_refresh(self, now: datetime, reason: str) -> bool:
+        decision = self._resume_recovery().request_forced_refresh(now, self.refreshing)
+        self._sync_resume_recovery_aliases()
+        if decision.abandoned_generation is not None:
+            self._log_abandoned_refresh(reason, decision.abandoned_generation)
+        return decision.start_refresh
+
+    def _is_incomplete_snapshot_regression(self, snapshot: UsageSnapshot) -> bool:
+        previous = getattr(self, "last_snapshot", None)
+        if not previous or not previous.has_data or not snapshot.has_data:
+            return False
+        previous_keys = {window_key(window) for window in previous.windows}
+        current_keys = {window_key(window) for window in snapshot.windows}
+        for key in ("5h", "7d"):
+            if key in previous_keys and key not in current_keys:
+                return True
+        return bool(previous.account and not snapshot.account and previous.windows)
+
+    def _is_low_confidence_snapshot(self, snapshot: UsageSnapshot) -> bool:
+        if not snapshot.has_data:
+            return False
+        keys = {window_key(window) for window in snapshot.windows}
+        if snapshot.account and "7d" in keys:
+            return False
+        if "7d" in keys and "5h" in keys:
+            return False
+        has_limit_pair = any(window.limit_total is not None or window.limit_used is not None for window in snapshot.windows)
+        if has_limit_pair and snapshot.account:
+            return False
+        return (
+            not snapshot.account
+            and len(snapshot.windows) == 1
+            and "5h" in keys
+            and not has_limit_pair
+            and (snapshot.windows[0].credits_remaining or 0) <= 1
+        )
+
+    def _hold_low_confidence_snapshot(self, snapshot: UsageSnapshot, now: datetime) -> bool:
+        if not self._is_low_confidence_snapshot(snapshot):
+            return False
+        if getattr(self, "transient_failure_since", None) is None:
+            self.transient_failure_since = now
+            self.transient_failure_count = 0
+        self.transient_failure_count += 1
+        self.transient_status_note = "low confidence snapshot"
+        self.status_text = self._stable_status_text() if self._has_displayable_data() else "обновляю"
+        self._write_ui_log(
+            f"low_confidence_snapshot_held count={self.transient_failure_count} "
+            f"{self._snapshot_debug_summary(snapshot)}"
+        )
+        return True
+
+    def _hold_incomplete_snapshot_regression(self, snapshot: UsageSnapshot, now: datetime) -> bool:
+        if not self._is_incomplete_snapshot_regression(snapshot):
+            return False
+        if getattr(self, "transient_failure_since", None) is None:
+            self.transient_failure_since = now
+            self.transient_failure_count = 0
+        self.transient_failure_count += 1
+        self.transient_status_note = "incomplete snapshot"
+        self.status_text = self._stable_status_text()
+        self._write_ui_log(
+            f"incomplete_snapshot_held count={self.transient_failure_count} "
+            f"{self._snapshot_debug_summary(snapshot)}"
+        )
+        return True
+
+    def _snapshot_debug_summary(self, snapshot: UsageSnapshot) -> str:
+        parts = [
+            f"account={snapshot.account!r}",
+            f"windows={len(snapshot.windows)}",
+            f"status={snapshot.status_note!r}",
+        ]
+        for window in snapshot.windows:
+            key = window_key(window) or window.title
+            parts.append(
+                f"{key}:remaining={window.credits_remaining} "
+                f"used={window.limit_used} total={window.limit_total} "
+                f"progress={window.progress_percent}"
+            )
+        daily = getattr(self, "daily_usage", None)
+        last_snapshot = getattr(self, "last_snapshot", None)
+        if daily is not None and last_snapshot is not None and hasattr(daily, "today_spent_7d"):
+            try:
+                today_spent = daily.today_spent_7d(last_snapshot)
+            except Exception:
+                today_spent = None
+            if today_spent is not None:
+                parts.append(f"daily_spent={today_spent.amount}")
+        return " ".join(parts)
 
 
 def short_number(value: int | None) -> str:
@@ -114,7 +266,7 @@ def compact_plan_status(value: str | None) -> str:
     return f"ост. {compact_reset_text(cleaned)}"
 
 
-class UsageOverlay:
+class UsageOverlay(_ResumeRecoveryOverlayMixin):
     WIDTH = 222
     HEIGHT = 78
     DAILY_LIMIT_HEIGHT = 106
@@ -129,6 +281,7 @@ class UsageOverlay:
     UPDATE_CHECK_SECONDS = 3 * 60 * 60
     RESUME_HEARTBEAT_SECONDS = 30
     RESUME_GAP_SECONDS = 120
+    STALE_REFRESH_SECONDS = 120
     DRAG_FRAME_MS = 16
     INTERVAL_CHOICES_MINUTES = (1, 3, 5, 10, 15, 60)
     if sys.platform == "darwin":
@@ -167,6 +320,11 @@ class UsageOverlay:
         self.daily_limit_set_at = self._load_daily_limit_set_at()
         self.daily_limit_credits = self._load_daily_limit_credits()
         self.refreshing = False
+        self.resume_recovery = ResumeRefreshCoordinator(self.STALE_REFRESH_SECONDS)
+        self.resume_recovery_state = self.resume_recovery
+        self.refresh_started_at: datetime | None = None
+        self.refresh_generation = 0
+        self.resume_recovery_pending = False
         self.after_id: str | None = None
         self.resume_after_id: str | None = None
         self.last_refresh_at: datetime | None = None
@@ -217,6 +375,11 @@ class UsageOverlay:
             self._scaled_height(),
             self._s(self.WINDOW_CORNER_RADIUS),
             self.WINDOW_TRANSPARENT_COLOR,
+        )
+        self.power_event_handle = install_win32_power_broadcast_handler(
+            self.root,
+            on_suspend=self._on_power_suspend,
+            on_resume=self._on_power_resume,
         )
 
         self._bind_window()
@@ -1100,11 +1263,15 @@ class UsageOverlay:
         try:
             if previous and now - previous >= timedelta(seconds=self.RESUME_GAP_SECONDS):
                 self._write_ui_log(f"resume_gap_detected seconds={(now - previous).total_seconds():.0f}")
-                self.last_refresh_at = None
-                if not self.refreshing:
-                    self.refresh(force=True)
+                self.request_resume_recovery("timer_gap")
         finally:
             self._schedule_resume_watchdog()
+
+    def _on_power_suspend(self) -> None:
+        self._write_ui_log("power_suspend")
+
+    def _on_power_resume(self) -> None:
+        self.request_resume_recovery("windows_power_resume")
 
     def _has_displayable_data(self) -> bool:
         return bool(self.last_snapshot and self.last_snapshot.has_data)
@@ -1532,6 +1699,12 @@ class UsageOverlay:
         if not snapshot.has_data and self._hold_transient_failure(snapshot.status_note, now):
             self._render()
             return
+        if self._hold_low_confidence_snapshot(snapshot, now):
+            self._render()
+            return
+        if self._hold_incomplete_snapshot_regression(snapshot, now):
+            self._render()
+            return
 
         self.last_snapshot = snapshot
         self.last_refresh_at = now
@@ -1546,7 +1719,8 @@ class UsageOverlay:
             f"snapshot account={snapshot.account!r} total={snapshot.total_used} "
             f"remaining={snapshot.remaining} windows={len(snapshot.windows)} "
             f"titles={[item.title for item in snapshot.windows]!r} "
-            f"cached={snapshot.is_cached} status={snapshot.status_note!r}"
+            f"cached={snapshot.is_cached} status={snapshot.status_note!r} "
+            f"{self._snapshot_debug_summary(snapshot)}"
         )
         self._render()
 
@@ -1574,7 +1748,14 @@ class UsageOverlay:
                 raise
             return self.reader()
 
-    def _finish_refresh(self, snapshot: UsageSnapshot | None = None, error: object | None = None) -> None:
+    def _finish_refresh(
+        self,
+        snapshot: UsageSnapshot | None = None,
+        error: object | None = None,
+        generation: int | None = None,
+    ) -> None:
+        if not self._finish_refresh_tracking(generation):
+            return
         try:
             if error is not None:
                 self._apply_error(error)
@@ -1584,24 +1765,30 @@ class UsageOverlay:
             self.refreshing = False
             self._schedule_next_refresh()
 
-    def _refresh_in_background(self, force_session_recovery: bool = False) -> None:
+    def _refresh_in_background(self, force_session_recovery: bool = False, generation: int | None = None) -> None:
         try:
             snapshot = self._read_snapshot(force_session_recovery=force_session_recovery)
         except Exception as exc:  # noqa: BLE001 - show operational errors without crashing.
             try:
-                self.root.after(0, lambda error=exc: self._finish_refresh(error=error))
+                self.root.after(0, lambda error=exc, gen=generation: self._finish_refresh(error=error, generation=gen))
             except tk.TclError:
                 self.refreshing = False
             return
         try:
-            self.root.after(0, lambda result=snapshot: self._finish_refresh(snapshot=result))
+            self.root.after(
+                0,
+                lambda result=snapshot, gen=generation: self._finish_refresh(snapshot=result, generation=gen),
+            )
         except tk.TclError:
             self.refreshing = False
 
     def refresh(self, force: bool = False) -> None:
         now = datetime.now().astimezone()
+        self._write_ui_log(f"refresh_requested force={force} refreshing={self.refreshing}")
         if self.refreshing:
-            return
+            if not force or not self._can_start_forced_refresh(now, "forced_refresh"):
+                self._write_ui_log(f"refresh_skipped force={force} refreshing=True")
+                return
         has_fresh_data = self._has_displayable_data()
         if (
             not force
@@ -1616,17 +1803,22 @@ class UsageOverlay:
             return
 
         self.refreshing = True
+        generation = self._begin_refresh_tracking(now)
+        self._write_ui_log(f"refresh_started force={force} generation={generation}")
         if not has_fresh_data:
             self.status_text = "обновляю"
             self._render()
         if getattr(self, "async_refresh", False):
-            threading.Thread(target=self._refresh_in_background, args=(force,), daemon=True).start()
+            threading.Thread(target=self._refresh_in_background, args=(force, generation), daemon=True).start()
             return
         self.root.update_idletasks()
         try:
-            self._finish_refresh(snapshot=self._read_snapshot(force_session_recovery=force))
+            self._finish_refresh(
+                snapshot=self._read_snapshot(force_session_recovery=force),
+                generation=generation,
+            )
         except Exception as exc:  # noqa: BLE001 - show operational errors without crashing.
-            self._finish_refresh(error=exc)
+            self._finish_refresh(error=exc, generation=generation)
 
     def run(self) -> None:
         self.root.mainloop()
@@ -1643,6 +1835,13 @@ class UsageOverlay:
         if self.drag_after_id:
             self.root.after_cancel(self.drag_after_id)
             self.drag_after_id = None
+        handle = getattr(self, "power_event_handle", None)
+        if handle is not None:
+            try:
+                handle.uninstall()
+            except Exception:
+                pass
+            self.power_event_handle = None
         self._hide_tooltip()
         self._save_window_position()
         self.root.destroy()
@@ -1668,7 +1867,7 @@ if sys.platform == "darwin":
             except Exception:
                 pass
 
-    class MenuBarOverlay:
+    class MenuBarOverlay(_ResumeRecoveryOverlayMixin):
         """macOS menu bar status item showing Vibemode usage.
 
         Displays a compact title (e.g. "NG 82.3M") in the menu bar; clicking it
@@ -1680,6 +1879,7 @@ if sys.platform == "darwin":
         UPDATE_CHECK_SECONDS = UsageOverlay.UPDATE_CHECK_SECONDS
         RESUME_HEARTBEAT_SECONDS = UsageOverlay.RESUME_HEARTBEAT_SECONDS
         RESUME_GAP_SECONDS = UsageOverlay.RESUME_GAP_SECONDS
+        STALE_REFRESH_SECONDS = UsageOverlay.STALE_REFRESH_SECONDS
         TRANSIENT_FAILURE_CONFIRMATIONS = UsageOverlay.TRANSIENT_FAILURE_CONFIRMATIONS
         TRANSIENT_FAILURE_GRACE_SECONDS = UsageOverlay.TRANSIENT_FAILURE_GRACE_SECONDS
 
@@ -1710,6 +1910,11 @@ if sys.platform == "darwin":
             self.last_resume_check_at: datetime | None = None
             self._keep_browser_open_override: bool | None = None
             self.refreshing = False
+            self.resume_recovery = ResumeRefreshCoordinator(self.STALE_REFRESH_SECONDS)
+            self.resume_recovery_state = self.resume_recovery
+            self.refresh_started_at: datetime | None = None
+            self.refresh_generation = 0
+            self.resume_recovery_pending = False
             self.transient_failure_since: datetime | None = None
             self.transient_failure_count = 0
             self.transient_status_note: str | None = None
@@ -1720,6 +1925,7 @@ if sys.platform == "darwin":
             self._pending: _queue_module.Queue = _queue_module.Queue()
             self._ns_timer: object | None = None
             self._resume_ns_timer: object | None = None
+            self._power_observer: object | None = None
 
             from .popover_server import PopoverServer
             from .macos_popover import MenuBarPopover
@@ -2175,10 +2381,19 @@ if sys.platform == "darwin":
 
         # ------------------------------------------------------------------ refresh logic
 
+        def _on_power_sleep(self) -> None:
+            self._write_ui_log("power_suspend")
+
+        def _on_power_wake(self) -> None:
+            self.request_resume_recovery("macos_workspace_wake")
+
         def refresh(self, force: bool = False) -> None:
             now = datetime.now().astimezone()
+            self._write_ui_log(f"refresh_requested force={force} refreshing={self.refreshing}")
             if self.refreshing:
-                return
+                if not force or not self._can_start_forced_refresh(now, "forced_refresh"):
+                    self._write_ui_log(f"refresh_skipped force={force} refreshing=True")
+                    return
             if (
                 not force
                 and self._has_displayable_data()
@@ -2189,26 +2404,38 @@ if sys.platform == "darwin":
                 self._reschedule_timer()
                 return
             self.refreshing = True
+            generation = self._begin_refresh_tracking(now)
+            self._write_ui_log(f"refresh_started force={force} generation={generation}")
             if self.async_refresh:
-                threading.Thread(target=self._refresh_in_background, args=(force,), daemon=True).start()
+                threading.Thread(target=self._refresh_in_background, args=(force, generation), daemon=True).start()
             else:
                 try:
-                    self._finish_refresh(snapshot=self._read_snapshot(force_session_recovery=force))
+                    self._finish_refresh(
+                        snapshot=self._read_snapshot(force_session_recovery=force),
+                        generation=generation,
+                    )
                 except Exception as exc:
-                    self._finish_refresh(error=exc)
+                    self._finish_refresh(error=exc, generation=generation)
 
-        def _refresh_in_background(self, force_session_recovery: bool = False) -> None:
+        def _refresh_in_background(self, force_session_recovery: bool = False, generation: int | None = None) -> None:
             self._write_ui_log("refresh_background_start")
             try:
                 snapshot = self._read_snapshot(force_session_recovery=force_session_recovery)
             except Exception as exc:
                 self._write_ui_log(f"refresh_background_error {exc!r}")
-                self._pending.put(("error", exc))
+                self._pending.put(("error", exc, generation))
                 return
             self._write_ui_log(f"refresh_background_done has_data={snapshot.has_data}")
-            self._pending.put(("snapshot", snapshot))
+            self._pending.put(("snapshot", snapshot, generation))
 
-        def _finish_refresh(self, snapshot: UsageSnapshot | None = None, error: object | None = None) -> None:
+        def _finish_refresh(
+            self,
+            snapshot: UsageSnapshot | None = None,
+            error: object | None = None,
+            generation: int | None = None,
+        ) -> None:
+            if not self._finish_refresh_tracking(generation):
+                return
             try:
                 if error is not None:
                     self._apply_error(error)
@@ -2222,6 +2449,12 @@ if sys.platform == "darwin":
             now = datetime.now().astimezone()
             if not snapshot.has_data and self._hold_transient_failure(snapshot.status_note, now):
                 return
+            if self._hold_low_confidence_snapshot(snapshot, now):
+                self._push_server_data()
+                return
+            if self._hold_incomplete_snapshot_regression(snapshot, now):
+                self._push_server_data()
+                return
             self.last_snapshot = snapshot
             self.last_refresh_at = now
             if snapshot.has_data:
@@ -2230,7 +2463,8 @@ if sys.platform == "darwin":
             self._write_ui_log(
                 f"snapshot account={snapshot.account!r} total={snapshot.total_used} "
                 f"remaining={snapshot.remaining} windows={len(snapshot.windows)} "
-                f"cached={snapshot.is_cached} status={snapshot.status_note!r}"
+                f"cached={snapshot.is_cached} status={snapshot.status_note!r} "
+                f"{self._snapshot_debug_summary(snapshot)}"
             )
             for i, w in enumerate(snapshot.windows):
                 self._write_ui_log(
@@ -2288,10 +2522,11 @@ if sys.platform == "darwin":
                 while True:
                     item = self._pending.get_nowait()
                     kind, value = item[0], item[1]
+                    generation = item[2] if len(item) > 2 else None
                     if kind == "snapshot":
-                        self._finish_refresh(snapshot=value)
+                        self._finish_refresh(snapshot=value, generation=generation)
                     elif kind == "error":
-                        self._finish_refresh(error=value)
+                        self._finish_refresh(error=value, generation=generation)
                     elif kind == "resize":
                         if self._popover_ui:
                             self._popover_ui.resize_to_content(value)
@@ -2338,6 +2573,11 @@ if sys.platform == "darwin":
             # Poll timer: drains background refresh results every 0.5s on main thread
             self._ns_poll_timer = self._make_ns_timer(0.5, self._drain_pending)
 
+            self._power_observer = install_macos_power_observer(
+                on_sleep=self._on_power_sleep,
+                on_wake=self._on_power_wake,
+            )
+
             # Resume watchdog
             self._resume_ns_timer = self._make_ns_timer(
                 self.RESUME_HEARTBEAT_SECONDS, self._on_resume_watchdog_ns
@@ -2361,14 +2601,18 @@ if sys.platform == "darwin":
             self.last_resume_check_at = now
             if previous and now - previous >= timedelta(seconds=self.RESUME_GAP_SECONDS):
                 self._write_ui_log(f"resume_gap_detected seconds={(now - previous).total_seconds():.0f}")
-                self.last_refresh_at = None
-                if not self.refreshing:
-                    self.refresh(force=True)
+                self.request_resume_recovery("timer_gap")
 
         def close(self) -> None:
             self._cancel_ns_timer(self._ns_timer)
             self._cancel_ns_timer(getattr(self, "_ns_poll_timer", None))
             self._cancel_ns_timer(self._resume_ns_timer)
+            if self._power_observer is not None:
+                try:
+                    self._power_observer.uninstall()  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+                self._power_observer = None
             if self._popover_ui:
                 self._popover_ui.remove()
             self._server.stop()

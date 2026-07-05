@@ -17,6 +17,7 @@ from neurogate_usage_overlay.overlay import (
     format_limit_value,
     version_menu_label,
 )
+from neurogate_usage_overlay.resume_recovery import ResumeRecoveryState
 from neurogate_usage_overlay.update_checker import UpdateInfo
 
 
@@ -315,6 +316,116 @@ class OverlayScheduleTest(unittest.TestCase):
         self.assertEqual(calls, [True])
         self.assertIsNone(overlay.last_refresh_at)
         self.assertEqual(root.after_calls, [UsageOverlay.RESUME_HEARTBEAT_SECONDS * 1000])
+
+    def test_resume_recovery_abandons_stale_active_refresh(self):
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        calls: list[bool] = []
+        logs: list[str] = []
+        state = ResumeRecoveryState(stale_refresh_seconds=1)
+        state.begin_refresh(datetime.now().astimezone() - timedelta(seconds=5))
+        overlay.resume_recovery_state = state
+        overlay.refreshing = True
+        overlay.last_refresh_at = datetime.now().astimezone()
+        overlay.refresh = lambda force=False: calls.append(force)  # type: ignore[method-assign]
+        overlay._write_ui_log = lambda message: logs.append(message)
+
+        overlay.request_resume_recovery("test_resume")
+
+        self.assertEqual(calls, [True])
+        self.assertIsNone(overlay.last_refresh_at)
+        self.assertFalse(overlay.refreshing)
+        self.assertTrue(any("stale_refresh_abandoned" in item for item in logs))
+
+    def test_resume_recovery_waits_for_fresh_active_refresh(self):
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        calls: list[bool] = []
+        state = ResumeRecoveryState(stale_refresh_seconds=120)
+        state.begin_refresh(datetime.now().astimezone())
+        overlay.resume_recovery_state = state
+        overlay.refreshing = True
+        overlay.last_refresh_at = datetime.now().astimezone()
+        overlay.refresh = lambda force=False: calls.append(force)  # type: ignore[method-assign]
+        overlay._write_ui_log = lambda _message: None
+
+        overlay.request_resume_recovery("test_resume")
+
+        self.assertEqual(calls, [])
+        self.assertTrue(overlay.refreshing)
+
+    def test_stale_refresh_result_is_ignored(self):
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        logs: list[str] = []
+        state = ResumeRecoveryState(stale_refresh_seconds=1)
+        old_generation = state.begin_refresh(datetime.now().astimezone() - timedelta(seconds=5))
+        state.abandon_active_refresh()
+        overlay.resume_recovery_state = state
+        overlay.refreshing = True
+        overlay.last_snapshot = None
+        overlay._write_ui_log = lambda message: logs.append(message)
+        overlay._schedule_next_refresh = lambda: None  # type: ignore[method-assign]
+
+        overlay._finish_refresh(
+            snapshot=UsageSnapshot(
+                updated_at=datetime.now(),
+                windows=[UsageWindow(title="old", credits_remaining=1)],
+            ),
+            generation=old_generation,
+        )
+
+        self.assertIsNone(overlay.last_snapshot)
+        self.assertTrue(overlay.refreshing)
+        self.assertTrue(any("stale_refresh_result_ignored" in item for item in logs))
+
+    def test_incomplete_snapshot_after_sleep_does_not_replace_full_limits(self):
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        logs: list[str] = []
+        full_snapshot = UsageSnapshot(
+            updated_at=datetime.now(),
+            account="Ascend",
+            windows=[
+                UsageWindow(title="5 часов", credits_remaining=100_000_000),
+                UsageWindow(title="7 дней", credits_remaining=500_000_000),
+            ],
+        )
+        incomplete_snapshot = UsageSnapshot(
+            updated_at=datetime.now(),
+            account=None,
+            windows=[UsageWindow(title="5 часов", credits_remaining=99_000_000)],
+        )
+        overlay.last_snapshot = full_snapshot
+        overlay.last_refresh_at = datetime.now().astimezone()
+        overlay.status_text = "обн. 10:00"
+        overlay.transient_failure_since = None
+        overlay.transient_failure_count = 0
+        overlay.transient_status_note = None
+        overlay._write_ui_log = lambda message: logs.append(message)
+        overlay._render = lambda: None  # type: ignore[method-assign]
+
+        overlay._apply_snapshot(incomplete_snapshot)
+
+        self.assertIs(overlay.last_snapshot, full_snapshot)
+        self.assertTrue(any("incomplete_snapshot_held" in item for item in logs))
+
+    def test_low_confidence_first_snapshot_is_not_displayed_as_limits(self):
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        logs: list[str] = []
+        partial_snapshot = UsageSnapshot(
+            updated_at=datetime.now(),
+            account=None,
+            windows=[UsageWindow(title="5 часов", credits_remaining=1)],
+        )
+        overlay.last_snapshot = None
+        overlay.status_text = "обновляю"
+        overlay.transient_failure_since = None
+        overlay.transient_failure_count = 0
+        overlay.transient_status_note = None
+        overlay._write_ui_log = lambda message: logs.append(message)
+        overlay._render = lambda: None  # type: ignore[method-assign]
+
+        overlay._apply_snapshot(partial_snapshot)
+
+        self.assertIsNone(overlay.last_snapshot)
+        self.assertTrue(any("low_confidence_snapshot_held" in item for item in logs))
 
 
 class OverlayPositionTest(unittest.TestCase):

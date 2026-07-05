@@ -2,6 +2,34 @@
 
 Use this checklist before sharing the overlay publicly.
 
+## Release Source Of Truth
+
+Vibemode can be changed from multiple machines. Keep these states separate:
+
+- local working tree: what the current machine has on disk;
+- `main`: what developers and Git installs receive after `git pull`;
+- GitHub Release: what ZIP installs and the in-app updater can see;
+- release assets: the actual ZIP and checksum attached to the Release.
+
+The in-app update checker reads only:
+
+```text
+https://api.github.com/repos/RyandavisProject/vibemode/releases/latest
+```
+
+If `releases/latest` returns `v2.4`, then a running `2.4` overlay is correct to
+show no update, even if `main`, a local machine, or README already mentions
+`2.5`.
+
+A public update exists only when all of these are true:
+
+- version files were updated consistently;
+- `main` was pushed;
+- a published GitHub Release exists for `vX.Y.Z`;
+- `vibemode-vX.Y.Z.zip` is attached;
+- `vibemode-vX.Y.Z.zip.sha256` is attached or the asset exposes a SHA256 digest;
+- GitHub marks that Release as the latest stable Release.
+
 ## 0. Owner Push Protocol
 
 When the owner asks to "push", "publish", "update GitHub", or "upload the
@@ -27,6 +55,35 @@ A complete Vibemode push must account for every user installation path:
 If the owner explicitly asks for code-only push or no release, say clearly that
 ZIP installs and in-app updates will not receive the new version until a GitHub
 Release with assets is published.
+
+## 0.1 Multi-Machine Handoff Protocol
+
+When continuing work from another computer or AI agent:
+
+1. Read `AGENTS.md` and `docs/AI_MAINTAINER_PROMPT.md`.
+2. Run `git fetch --tags`.
+3. Run `git status --short --branch`.
+4. Compare local version files with the latest GitHub Release.
+5. Check whether the latest work was only pushed to `main` or also released.
+6. Do not overwrite uncommitted work from another machine.
+7. Do not delete local state, browser profiles, cookies, logs, or history.
+
+Before reporting "updated", explicitly state:
+
+```text
+main: pushed / not pushed
+version files: X.Y / mismatch
+release ZIP: built / not built
+GitHub Release: published / not published
+in-app update: visible / not visible
+```
+
+For Mac-only cosmetic changes, say whether they are:
+
+- code-only changes for the next developer pull;
+- included in a ZIP asset;
+- visible to the in-app updater;
+- expected to affect Windows behavior.
 
 ## 1. Remove Local Data
 
@@ -68,10 +125,12 @@ The release ZIP intentionally excludes internal handoff/state/audit files:
 Confirm these files are current:
 
 - `README.md`
+- `AGENTS.md`
 - `SECURITY.md`
 - `docs/PRIVACY.md`
 - `docs/ARCHITECTURE.md`
 - `docs/AI_INSTALL_PROMPT.md`
+- `docs/AI_MAINTAINER_PROMPT.md`
 
 ## 4. Initialize Repository
 
@@ -139,4 +198,21 @@ Suggested user command:
 ```text
 Install Vibemode from this repository. Read docs/AI_INSTALL_PROMPT.md
 and follow it exactly.
+```
+
+## 9. AI-Assisted Maintenance
+
+Point AI coding agents that will edit or release the project to:
+
+```text
+AGENTS.md
+docs/AI_MAINTAINER_PROMPT.md
+```
+
+Suggested owner command:
+
+```text
+Continue Vibemode Overlay from this repository. Read AGENTS.md and
+docs/AI_MAINTAINER_PROMPT.md first. Then inspect the local version, main,
+GitHub Releases, ZIP assets, and in-app update state before changing anything.
 ```

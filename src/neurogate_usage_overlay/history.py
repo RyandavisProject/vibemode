@@ -69,11 +69,15 @@ class DailyUsageStore:
             payload = self._new_payload(today, current, now)
         else:
             first = self._to_int(payload.get("first_7d_remaining"))
-            if first is None or current > first:
-                payload = self._new_payload(today, current, now)
-            elif not payload.get("first_seen_at"):
+            if first is None or not payload.get("first_seen_at"):
                 payload = self._new_payload(today, current, now)
             else:
+                last = self._to_int(payload.get("last_7d_remaining"))
+                previous = last if last is not None else first
+                spent = self._today_spent_from_payload(payload, previous)
+                if current < previous:
+                    spent += previous - current
+                payload["today_spent_7d"] = max(0, spent)
                 payload["last_7d_remaining"] = current
 
         self._save(payload)
@@ -89,8 +93,11 @@ class DailyUsageStore:
         first = self._to_int(payload.get("first_7d_remaining"))
         if first is None:
             return None
+        spent = self._to_int(payload.get("today_spent_7d"))
+        if spent is None:
+            spent = max(0, first - window.credits_remaining)
         return TodaySpend(
-            amount=max(0, first - window.credits_remaining),
+            amount=max(0, spent),
             since_text=self._format_since_time(payload.get("first_seen_at")),
         )
 
@@ -107,7 +114,18 @@ class DailyUsageStore:
             "first_seen_at": first_seen_at.isoformat(timespec="seconds"),
             "first_7d_remaining": remaining,
             "last_7d_remaining": remaining,
+            "today_spent_7d": 0,
         }
+
+    @classmethod
+    def _today_spent_from_payload(cls, payload: dict[str, object], current: int) -> int:
+        stored = cls._to_int(payload.get("today_spent_7d"))
+        if stored is not None:
+            return max(0, stored)
+        first = cls._to_int(payload.get("first_7d_remaining"))
+        if first is None:
+            return 0
+        return max(0, first - current)
 
     @staticmethod
     def _to_int(value: object) -> int | None:

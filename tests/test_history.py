@@ -95,7 +95,7 @@ class DailyUsageStoreTest(unittest.TestCase):
             self.assertEqual(spent.amount, 0)
             self.assertEqual(spent.since_text, "01:00")
 
-    def test_remaining_growth_resets_daily_baseline(self):
+    def test_remaining_growth_without_prior_spend_keeps_zero_spent(self):
         with tempfile.TemporaryDirectory() as directory:
             store = DailyUsageStore(Path(directory) / "usage-daily.json")
             first = UsageSnapshot(
@@ -113,7 +113,37 @@ class DailyUsageStoreTest(unittest.TestCase):
             spent = store.today_spent_7d(after_reset, datetime(2026, 6, 8, 13, 0))
             self.assertIsNotNone(spent)
             self.assertEqual(spent.amount, 0)
-            self.assertEqual(spent.since_text, "13:00")
+            self.assertEqual(spent.since_text, "12:00")
+
+    def test_remaining_growth_after_sleep_preserves_accumulated_daily_spend(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = DailyUsageStore(Path(directory) / "usage-daily.json")
+            first = UsageSnapshot(
+                updated_at=datetime.now(),
+                windows=[UsageWindow(title=TITLE_7D, credits_remaining=300_000_000)],
+            )
+            before_sleep = UsageSnapshot(
+                updated_at=datetime.now(),
+                windows=[UsageWindow(title=TITLE_7D, credits_remaining=280_000_000)],
+            )
+            after_sleep_rollover = UsageSnapshot(
+                updated_at=datetime.now(),
+                windows=[UsageWindow(title=TITLE_7D, credits_remaining=350_000_000)],
+            )
+            after_more_work = UsageSnapshot(
+                updated_at=datetime.now(),
+                windows=[UsageWindow(title=TITLE_7D, credits_remaining=340_000_000)],
+            )
+
+            store.record_snapshot(first, datetime(2026, 6, 8, 1, 0))
+            store.record_snapshot(before_sleep, datetime(2026, 6, 8, 10, 0))
+            store.record_snapshot(after_sleep_rollover, datetime(2026, 6, 8, 11, 0))
+            store.record_snapshot(after_more_work, datetime(2026, 6, 8, 12, 0))
+
+            spent = store.today_spent_7d(after_more_work, datetime(2026, 6, 8, 12, 0))
+            self.assertIsNotNone(spent)
+            self.assertEqual(spent.amount, 30_000_000)
+            self.assertEqual(spent.since_text, "01:00")
 
     def test_existing_daily_file_without_first_seen_is_migrated(self):
         with tempfile.TemporaryDirectory() as directory:
