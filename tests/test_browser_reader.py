@@ -334,10 +334,20 @@ class BrowserReaderModeTest(unittest.TestCase):
             profile_dir = Path(directory) / "browser-profile"
             cache_file = profile_dir / "Default" / "Cache" / "Cache_Data" / "file"
             code_cache_file = profile_dir / "Default" / "Code Cache" / "js" / "file"
+            metrics_file = profile_dir / "BrowserMetrics" / "BrowserMetrics-test.pma"
+            spare_metrics_file = profile_dir / "BrowserMetrics-spare.pma"
             local_storage_file = profile_dir / "Default" / "Local Storage" / "leveldb" / "session"
             session_storage_file = profile_dir / "Default" / "Session Storage" / "session"
             cookie_file = profile_dir / "Default" / "Cookies"
-            for path in (cache_file, code_cache_file, local_storage_file, session_storage_file, cookie_file):
+            for path in (
+                cache_file,
+                code_cache_file,
+                metrics_file,
+                spare_metrics_file,
+                local_storage_file,
+                session_storage_file,
+                cookie_file,
+            ):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("data", encoding="utf-8")
 
@@ -348,6 +358,8 @@ class BrowserReaderModeTest(unittest.TestCase):
 
             self.assertFalse((profile_dir / "Default" / "Cache").exists())
             self.assertFalse((profile_dir / "Default" / "Code Cache").exists())
+            self.assertFalse((profile_dir / "BrowserMetrics").exists())
+            self.assertFalse((profile_dir / "BrowserMetrics-spare.pma").exists())
             self.assertTrue(local_storage_file.exists())
             self.assertTrue(session_storage_file.exists())
             self.assertTrue(cookie_file.exists())
@@ -1022,6 +1034,35 @@ class BrowserReaderModeTest(unittest.TestCase):
 
         self.assertEqual(portal_refreshes, 1)
         self.assertEqual(reloads, 0)
+
+    def test_refresh_recovers_closed_browser_context_after_sleep(self):
+        reader = NeurogateUsageReader(BrowserSettings(headless=True))
+        reader._login_visible = False
+        reader._current_headless = True
+        recovered = []
+
+        class TargetClosedError(Exception):
+            pass
+
+        class Page:
+            url = reader.settings.usage_url
+
+            def reload(self, wait_until: str) -> None:
+                raise TargetClosedError("Page.reload: Target page, context or browser has been closed")
+
+        expected = UsageSnapshot(
+            updated_at=datetime.now(),
+            windows=[UsageWindow(title="5 часов", credits_remaining=42)],
+        )
+        reader._page = Page()
+        reader._current_page_has_usage_data = lambda: False  # type: ignore[method-assign]
+        reader._restart_browser_runtime_after_closed_error = lambda _error: recovered.append(True)  # type: ignore[method-assign]
+        reader.read = lambda force_session_recovery=False: expected  # type: ignore[method-assign]
+
+        snapshot = reader.refresh()
+
+        self.assertIs(snapshot, expected)
+        self.assertEqual(recovered, [True])
 
     def test_current_page_with_cabinet_error_is_not_treated_as_loaded_usage(self):
         reader = NeurogateUsageReader(BrowserSettings(headless=True))

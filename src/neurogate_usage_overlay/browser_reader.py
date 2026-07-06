@@ -31,6 +31,8 @@ AUTO_LOGIN_DELAY_ATTEMPTS = 3
 BODY_TEXT_TIMEOUT_MS = 3_000
 HIDDEN_SESSION_RECOVERY_COOLDOWN_SECONDS = 180
 PROFILE_CACHE_DIRS = (
+    "BrowserMetrics",
+    "BrowserMetrics-spare.pma",
     "GrShaderCache",
     "ShaderCache",
     "GraphiteDawnCache",
@@ -48,13 +50,18 @@ PROFILE_BROWSER_TERMINATION_TIMEOUT_SECONDS = 1.5
 
 
 def command_line_uses_profile(command: str, profile_dir: Path) -> bool:
-    normalized_profile = str(profile_dir.resolve()).replace("\\", "/").lower()
-    if not normalized_profile:
+    profile_variants = {
+        str(profile_dir).replace("\\", "/").lower(),
+        str(profile_dir.absolute()).replace("\\", "/").lower(),
+        str(profile_dir.resolve()).replace("\\", "/").lower(),
+    }
+    profile_variants.discard("")
+    if not profile_variants:
         return False
     for match in re.finditer(r"--user-data-dir=(?:\"([^\"]+)\"|'([^']+)'|(\S+))", command, flags=re.IGNORECASE):
         value = next(group for group in match.groups() if group is not None)
         normalized_value = value.rstrip("\"'").replace("\\", "/").lower()
-        if normalized_value == normalized_profile:
+        if normalized_value in profile_variants:
             return True
     return False
 
@@ -303,7 +310,10 @@ class NeurogateUsageReader:
             target = self.settings.profile_dir / Path(relative_path)
             try:
                 if target.exists():
-                    shutil.rmtree(target)
+                    if target.is_dir():
+                        shutil.rmtree(target)
+                    else:
+                        target.unlink()
             except Exception as exc:  # noqa: BLE001 - cache cleanup must not block the overlay.
                 self._write_debug(
                     parse_usage_text("", source_url=self.settings.usage_url),
@@ -399,6 +409,34 @@ class NeurogateUsageReader:
             self._playwright.stop()
             self._playwright = None
 
+    @staticmethod
+    def _is_browser_closed_error(error: object) -> bool:
+        text = f"{type(error).__name__}: {error}".lower()
+        return (
+            "targetclosederror" in text
+            or "target page, context or browser has been closed" in text
+            or "browser has been closed" in text
+        )
+
+    def _restart_browser_runtime_after_closed_error(self, error: object) -> None:
+        self._write_debug(
+            parse_usage_text("", source_url=self.settings.usage_url),
+            note=f"browser_closed_recovery_start error={type(error).__name__}",
+        )
+        self._close_context()
+        if self._playwright:
+            try:
+                self._playwright.stop()
+            except Exception as exc:
+                self._write_debug(
+                    parse_usage_text("", source_url=self.settings.usage_url),
+                    note=f"browser_closed_playwright_stop_error={exc!r}",
+                )
+            finally:
+                self._playwright = None
+        self._login_visible = False
+        self.start()
+
     @property
     def keep_browser_open(self) -> bool:
         return not self.settings.headless
@@ -481,6 +519,15 @@ class NeurogateUsageReader:
         return snapshot
 
     def refresh(self, force_session_recovery: bool = False) -> UsageSnapshot:
+        try:
+            return self._refresh_once(force_session_recovery=force_session_recovery)
+        except Exception as exc:
+            if not self._is_browser_closed_error(exc):
+                raise
+            self._restart_browser_runtime_after_closed_error(exc)
+            return self.read(force_session_recovery=True)
+
+    def _refresh_once(self, force_session_recovery: bool = False) -> UsageSnapshot:
         if not self._page:
             self.start()
         assert self._page is not None

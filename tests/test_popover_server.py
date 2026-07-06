@@ -7,10 +7,27 @@ from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from neurogate_usage_overlay.models import UsageSnapshot, UsageWindow
-from neurogate_usage_overlay.popover_server import PopoverServer
+from neurogate_usage_overlay.popover_server import PopoverServer, _Handler
 
 
 class PopoverServerTest(unittest.TestCase):
+    def test_popover_handler_ignores_disconnected_client(self) -> None:
+        handler = object.__new__(_Handler)
+        calls = []
+
+        class ClosedWriter:
+            def write(self, _body: bytes) -> None:
+                raise BrokenPipeError("client closed")
+
+        handler.send_response = lambda code: calls.append(("response", code))  # type: ignore[method-assign]
+        handler.send_header = lambda name, value: calls.append((name, value))  # type: ignore[method-assign]
+        handler.end_headers = lambda: calls.append(("end", None))  # type: ignore[method-assign]
+        handler.wfile = ClosedWriter()
+
+        handler._respond(200, "text/plain", b"ok")
+
+        self.assertIn(("response", 200), calls)
+
     def test_popover_server_renders_utf8_labels(self) -> None:
         server = PopoverServer()
         try:

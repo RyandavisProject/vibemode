@@ -9,6 +9,25 @@ STATE_DIR="$HOME/.neurogate-usage-overlay"
 PROFILE_PATH="$STATE_DIR/browser-profile"
 PID_FILE="$STATE_DIR/overlay.pid"
 LAUNCH_ONLY="${VIBEMODE_LAUNCH_ONLY:-0}"
+MAX_LOG_BYTES=$((256 * 1024))
+TRIM_LOG_BYTES=$((128 * 1024))
+
+prune_log_file() {
+    local path="$1"
+    [[ -f "$path" ]] || return 0
+    local size
+    size="$(wc -c < "$path" 2>/dev/null || echo 0)"
+    [[ "$size" =~ ^[0-9]+$ ]] || return 0
+    if (( size > MAX_LOG_BYTES )); then
+        local tmp="${path}.tmp"
+        tail -c "$TRIM_LOG_BYTES" "$path" > "$tmp" 2>/dev/null && mv "$tmp" "$path"
+        rm -f "$tmp"
+    fi
+}
+
+mkdir -p "$STATE_DIR"
+prune_log_file "$STATE_DIR/restart.log"
+prune_log_file "$STATE_DIR/launcher.log"
 
 # Install if venv is missing.
 if [[ ! -f "$VENV_PYTHON" ]]; then

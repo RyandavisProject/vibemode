@@ -28,6 +28,14 @@ if [[ "$(cd "$SHORTCUT_DIR" && pwd)" == "$(cd "$HOME/Desktop" && pwd)" ]]; then
 set -euo pipefail
 cd "$ROOT"
 export VIBEMODE_LAUNCH_ONLY=1
+mkdir -p "\$HOME/.neurogate-usage-overlay"
+if [[ -f "\$HOME/.neurogate-usage-overlay/launcher.log" ]]; then
+    size="\$(wc -c < "\$HOME/.neurogate-usage-overlay/launcher.log" 2>/dev/null || echo 0)"
+    if [[ "\$size" =~ ^[0-9]+$ ]] && (( size > 262144 )); then
+        tail -c 131072 "\$HOME/.neurogate-usage-overlay/launcher.log" > "\$HOME/.neurogate-usage-overlay/launcher.log.tmp" 2>/dev/null && mv "\$HOME/.neurogate-usage-overlay/launcher.log.tmp" "\$HOME/.neurogate-usage-overlay/launcher.log"
+        rm -f "\$HOME/.neurogate-usage-overlay/launcher.log.tmp"
+    fi
+fi
 exec bash scripts/run-overlay.sh
 COMMAND
     chmod +x "$COMMAND_PATH"
@@ -78,6 +86,14 @@ cat > "$MACOS_DIR/launch" <<LAUNCH
 #!/usr/bin/env bash
 ROOT=$PROJECT_ROOT_QUOTED
 export VIBEMODE_LAUNCH_ONLY=1
+mkdir -p "\$HOME/.neurogate-usage-overlay"
+if [[ -f "\$HOME/.neurogate-usage-overlay/launcher.log" ]]; then
+    size="\$(wc -c < "\$HOME/.neurogate-usage-overlay/launcher.log" 2>/dev/null || echo 0)"
+    if [[ "\$size" =~ ^[0-9]+$ ]] && (( size > 262144 )); then
+        tail -c 131072 "\$HOME/.neurogate-usage-overlay/launcher.log" > "\$HOME/.neurogate-usage-overlay/launcher.log.tmp" 2>/dev/null && mv "\$HOME/.neurogate-usage-overlay/launcher.log.tmp" "\$HOME/.neurogate-usage-overlay/launcher.log"
+        rm -f "\$HOME/.neurogate-usage-overlay/launcher.log.tmp"
+    fi
+fi
 exec bash "\$ROOT/scripts/run-overlay.sh"
 LAUNCH
 

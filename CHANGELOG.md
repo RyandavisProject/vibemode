@@ -2,6 +2,25 @@
 
 Все заметные изменения проекта фиксируются здесь. Даты пишутся в формате `дд-мм-гггг`.
 
+## 2.7 — 06-07-2026
+
+### Изменено
+
+- macOS overlay восстанавливает browser context после сна, если Chrome/Playwright context был закрыт системой.
+- `restart.log` и `launcher.log` подрезаются при запуске и больше не растут бесконечно.
+- Chrome-профиль чистит безопасные cache/metrics-файлы без удаления cookies, local storage и session storage.
+
+### Исправлено
+
+- Popover server больше не пишет traceback `BrokenPipeError`, когда локальный клиент закрыл соединение.
+
+### Проверки
+
+- `tests.test_browser_reader tests.test_log_utils tests.test_scripts tests.test_reader_worker tests.test_popover_server`: 69 tests OK.
+- `compileall src/neurogate_usage_overlay`: OK.
+- `git diff --check`: чисто.
+- Проверен live macOS-запуск: menu bar process работает, лимиты читаются.
+
 ## 2.6 — 04-07-2026
 
 ### Изменено

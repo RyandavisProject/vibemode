@@ -1,4 +1,4 @@
-# Vibemode Overlay 2.6
+# Vibemode Overlay 2.7
 
 Компактный desktop-overlay для лимитов Vibemode API. Работает локально на **Windows** и **macOS**, читает данные из кабинета Vibemode через локальную браузерную сессию Chrome/Playwright и показывает остатки, прогресс и время до сброса лимитов.
 
@@ -14,8 +14,8 @@
 
 <table>
   <tr>
-    <td><img src="docs/screenshots/overlay-tooltip.png" alt="Windows оверлей Vibemode Overlay 2.6" /></td>
-    <td><img src="docs/screenshots/overlay-menu.png" alt="Windows меню Vibemode Overlay 2.6" /></td>
+    <td><img src="docs/screenshots/overlay-tooltip.png" alt="Windows оверлей Vibemode Overlay 2.7" /></td>
+    <td><img src="docs/screenshots/overlay-menu.png" alt="Windows меню Vibemode Overlay 2.7" /></td>
   </tr>
   <tr>
     <td align="center">Windows overlay</td>
@@ -31,7 +31,7 @@
   </tr>
 </table>
 
-## Что нового в 2.6
+## Что нового в 2.7
 
 - macOS: установка из Git/ZIP создаёт `Vibemode.command` на рабочем столе.
 - Повторный запуск desktop-ярлыка больше не перезапускает overlay и не переоткрывает ЛК.
@@ -39,7 +39,10 @@
 - Windows/macOS: восстановление после сна стало нативным для платформы и не удаляет browser profile.
 - Overlay больше не заменяет хорошие лимиты на неполный snapshot после пробуждения.
 - Дневной расход не сбрасывается в ноль при росте 7-дневного окна.
-- Проверки: `scripts/check.ps1`, unit-тесты recovery/history/overlay/browser reader.
+- Логи `restart.log` и `launcher.log` больше не растут бесконечно.
+- Chrome-профиль чистит безопасные cache/metrics-файлы, не трогая cookies и session storage.
+- Popover server не пишет лишний traceback, если локальный клиент закрыл соединение.
+- Проверено: `scripts/check.ps1`, unit-тесты recovery/history/overlay/browser reader, live macOS-запуск.
 
 ## Установка
 
@@ -54,7 +57,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 ### Windows: из ZIP-архива
 
 1. Открой [Releases](https://github.com/RyandavisProject/vibemode/releases).
-2. Скачай `vibemode-v2.6.zip` из последнего релиза.
+2. Скачай `vibemode-v2.7.zip` из последнего релиза.
 3. Распакуй архив, например в `C:\Vibemode`.
 4. Запусти:
 
@@ -81,7 +84,7 @@ bash scripts/install.sh
 ### macOS: из ZIP-архива
 
 1. Открой [Releases](https://github.com/RyandavisProject/vibemode/releases).
-2. Скачай `vibemode-v2.6.zip` из последнего релиза.
+2. Скачай `vibemode-v2.7.zip` из последнего релиза.
 3. Распакуй архив и в папке проекта запусти:
 
 ```bash
@@ -143,6 +146,14 @@ python scripts\check-api-contract.py
 API-ключ, если используется для диагностики, вводится скрыто или через переменную окружения и не сохраняется проектом.
 
 ## История
+
+### 2.7 — 06-07-2026
+
+- macOS overlay восстанавливает browser context после сна без удаления локальной сессии.
+- Ограничен рост `restart.log` и `launcher.log`.
+- Добавлена безопасная чистка Chrome cache/metrics без удаления cookies/local/session storage.
+- Убран шумный `BrokenPipeError` из popover server при закрытом локальном клиенте.
+- Проверено: `69 tests OK`, `compileall`, live macOS-запуск с чтением лимитов.
 
 ### 2.6 — 04-07-2026
 
