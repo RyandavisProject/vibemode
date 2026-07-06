@@ -1,4 +1,6 @@
 from pathlib import Path
+import subprocess
+import tempfile
 import unittest
 
 
@@ -19,9 +21,44 @@ class ScriptSafetyTest(unittest.TestCase):
         script = (ROOT / "scripts" / "create-desktop-shortcut.sh").read_text(encoding="utf-8")
 
         self.assertIn("PROJECT_ROOT_QUOTED", script)
+        self.assertIn("PROJECT_ROOT_QUOTED=\"'${ROOT//\\'/\\'\\\\\\'\\'}'\"", script)
         self.assertIn("ROOT=$PROJECT_ROOT_QUOTED", script)
+        self.assertIn("bash -n \"$MACOS_DIR/launch\"", script)
+        self.assertIn("com.apple.quarantine", script)
         self.assertIn('exec bash "\\$ROOT/scripts/run-overlay.sh"', script)
         self.assertNotIn('ROOT="$(dirname "$(dirname "$(dirname "$LAUNCH_DIR")")")"', script)
+
+    def test_macos_app_launcher_preserves_utf8_project_root(self):
+        source = ROOT / "scripts" / "create-desktop-shortcut.sh"
+        with tempfile.TemporaryDirectory(prefix="vibemode-Новая папка-") as directory:
+            project = Path(directory) / "Проект с пробелом"
+            scripts = project / "scripts"
+            shortcuts = Path(directory) / "Applications"
+            scripts.mkdir(parents=True)
+            shortcuts.mkdir()
+            launcher = scripts / "create-desktop-shortcut.sh"
+            launcher.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+            launcher.chmod(0o755)
+
+            subprocess.run(
+                ["bash", str(launcher), "--shortcut-dir", str(shortcuts)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            launch_script = shortcuts / "Vibemode.app" / "Contents" / "MacOS" / "launch"
+            content = launch_script.read_text(encoding="utf-8")
+            self.assertIn(f"ROOT='{project}'", content)
+            self.assertNotIn("$'", content)
+
+    def test_macos_install_and_update_refresh_desktop_and_app_shortcuts(self):
+        install_script = (ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
+        update_script = (ROOT / "scripts" / "update-and-restart.sh").read_text(encoding="utf-8")
+
+        for script in (install_script, update_script):
+            self.assertIn("create-desktop-shortcut.sh", script)
+            self.assertIn('--shortcut-dir "$HOME/Applications"', script)
 
     def test_macos_run_overlay_does_not_kill_by_broad_brand_name(self):
         script = (ROOT / "scripts" / "run-overlay.sh").read_text(encoding="utf-8")

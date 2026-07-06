@@ -32,6 +32,9 @@ if [[ "$NO_SHORTCUT" -eq 0 ]]; then
         bash "$SCRIPTS_DIR/create-desktop-shortcut.sh" --shortcut-dir "$SHORTCUT_DIR"
     else
         bash "$SCRIPTS_DIR/create-desktop-shortcut.sh"
+        if [[ "$(uname)" == "Darwin" ]]; then
+            bash "$SCRIPTS_DIR/create-desktop-shortcut.sh" --shortcut-dir "$HOME/Applications"
+        fi
     fi
 fi
 

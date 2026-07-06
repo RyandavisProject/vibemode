@@ -39,6 +39,8 @@ fi
 exec bash scripts/run-overlay.sh
 COMMAND
     chmod +x "$COMMAND_PATH"
+    bash -n "$COMMAND_PATH"
+    xattr -dr com.apple.quarantine "$COMMAND_PATH" 2>/dev/null || true
     echo "Desktop launcher created: $COMMAND_PATH"
     echo "Double-click it to start Vibemode. If it is already running, it will not restart."
     exit 0
@@ -81,7 +83,7 @@ EOF
 
 # Write the launcher script.
 # ROOT is captured at install time so the bundle can live in ~/Applications.
-PROJECT_ROOT_QUOTED="$(printf '%q' "$ROOT")"
+PROJECT_ROOT_QUOTED="'${ROOT//\'/\'\\\'\'}'"
 cat > "$MACOS_DIR/launch" <<LAUNCH
 #!/usr/bin/env bash
 ROOT=$PROJECT_ROOT_QUOTED
@@ -98,6 +100,8 @@ exec bash "\$ROOT/scripts/run-overlay.sh"
 LAUNCH
 
 chmod +x "$MACOS_DIR/launch"
+bash -n "$MACOS_DIR/launch"
+xattr -dr com.apple.quarantine "$APP_PATH" 2>/dev/null || true
 
 # Tell Launch Services about the new bundle so it appears in Spotlight immediately.
 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister \

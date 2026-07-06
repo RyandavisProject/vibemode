@@ -184,6 +184,9 @@ if [[ "$NO_SHORTCUT" -eq 0 ]]; then
         bash "$SHORTCUT_SCRIPT" --shortcut-dir "$SHORTCUT_DIR"
     else
         bash "$SHORTCUT_SCRIPT"
+        if [[ "$(uname)" == "Darwin" ]]; then
+            bash "$SHORTCUT_SCRIPT" --shortcut-dir "$HOME/Applications"
+        fi
     fi
 fi
 
