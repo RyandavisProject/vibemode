@@ -29,6 +29,10 @@ class ScriptSafetyTest(unittest.TestCase):
         self.assertNotIn('ROOT="$(dirname "$(dirname "$(dirname "$LAUNCH_DIR")")")"', script)
 
     def test_macos_app_launcher_preserves_utf8_project_root(self):
+        bash_probe = subprocess.run(["bash", "--version"], capture_output=True, text=True)
+        if bash_probe.returncode != 0:
+            self.skipTest("bash is not available in this test environment")
+
         source = ROOT / "scripts" / "create-desktop-shortcut.sh"
         with tempfile.TemporaryDirectory(prefix="vibemode-Новая папка-") as directory:
             project = Path(directory) / "Проект с пробелом"
@@ -80,6 +84,16 @@ class ScriptSafetyTest(unittest.TestCase):
         self.assertIn('"PROJECT_STATE.md"', script)
         self.assertIn('"HANDOFF.md"', script)
         self.assertIn('"security_best_practices_report.md"', script)
+
+    def test_resume_diagnostics_reads_only_safe_overlay_logs(self):
+        script = (ROOT / "scripts" / "diagnose-resume.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("overlay-ui.log", script)
+        self.assertIn("overlay-debug.log", script)
+        self.assertIn("hidden_session_recovery_", script)
+        self.assertIn("WARN repeated identical snapshots after resume", script)
+        self.assertNotIn("browser-profile", script)
+        self.assertNotIn("cookies", script.lower())
 
 
 if __name__ == "__main__":

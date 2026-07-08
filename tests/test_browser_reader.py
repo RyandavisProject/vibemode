@@ -733,6 +733,74 @@ class BrowserReaderModeTest(unittest.TestCase):
         self.assertEqual(launches, [True])
         self.assertEqual(opened_visible, [])
 
+    def test_force_hidden_session_recovery_relaunches_even_when_dashboard_has_data(self):
+        reader = NeurogateUsageReader(BrowserSettings(headless=True))
+        reader._playwright = object()
+        reader._page = type("Page", (), {"url": reader.settings.usage_url})()
+        reader._current_headless = True
+        texts = iter(["stale dashboard", "fresh dashboard"])
+        launches: list[bool] = []
+        debug_notes: list[str] = []
+
+        def launch_context(*, headless: bool) -> None:
+            launches.append(headless)
+            reader._current_headless = headless
+            reader._page = type("Page", (), {"url": reader.settings.usage_url})()
+
+        def api_snapshot(text: str) -> UsageSnapshot | None:
+            if text == "stale dashboard":
+                return UsageSnapshot(
+                    updated_at=datetime.now(),
+                    account="Ascend",
+                    windows=[
+                        UsageWindow(
+                            title="5 часов",
+                            credits_remaining=99_630_000,
+                            limit_used=20_370_000,
+                            limit_total=120_000_000,
+                        ),
+                        UsageWindow(
+                            title="7 дней",
+                            credits_remaining=395_810_000,
+                            limit_used=204_190_000,
+                            limit_total=600_000_000,
+                        ),
+                    ],
+                )
+            if text == "fresh dashboard":
+                return UsageSnapshot(
+                    updated_at=datetime.now(),
+                    account="Ascend",
+                    windows=[
+                        UsageWindow(
+                            title="5 часов",
+                            credits_remaining=94_000_000,
+                            limit_used=26_000_000,
+                            limit_total=120_000_000,
+                        ),
+                        UsageWindow(
+                            title="7 дней",
+                            credits_remaining=390_000_000,
+                            limit_used=210_000_000,
+                            limit_total=600_000_000,
+                        ),
+                    ],
+                )
+            return None
+
+        reader._wait_for_usage_text = lambda: next(texts)  # type: ignore[method-assign]
+        reader._launch_context = launch_context  # type: ignore[method-assign]
+        reader._read_vibemode_api_snapshot = api_snapshot  # type: ignore[method-assign]
+        reader._hide_visible_browser_after_success = lambda: None  # type: ignore[method-assign]
+        reader._write_debug = lambda _snapshot, note="": debug_notes.append(note)  # type: ignore[method-assign]
+
+        snapshot = reader.read(force_session_recovery=True)
+
+        self.assertTrue(snapshot.has_data)
+        self.assertEqual(launches, [True])
+        self.assertEqual(snapshot.windows[0].credits_remaining, 94_000_000)
+        self.assertTrue(any("hidden_session_recovery_start reason=forced_session_recovery" in note for note in debug_notes))
+
     def test_visible_login_stuck_state_can_recover_hidden_session(self):
         reader = NeurogateUsageReader(BrowserSettings(headless=True))
         reader._playwright = object()

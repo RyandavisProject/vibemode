@@ -2,23 +2,30 @@
 
 Все заметные изменения проекта фиксируются здесь. Даты пишутся в формате `дд-мм-гггг`.
 
-## 2.7 — 06-07-2026
+## 2.7 — 08-07-2026
 
 ### Изменено
 
 - macOS overlay восстанавливает browser context после сна, если Chrome/Playwright context был закрыт системой.
+- Windows forced recovery после сна пересоздаёт hidden Playwright context даже когда dashboard выглядит валидным.
 - `restart.log` и `launcher.log` подрезаются при запуске и больше не растут бесконечно.
 - Chrome-профиль чистит безопасные cache/metrics-файлы без удаления cookies, local storage и session storage.
 
 ### Исправлено
 
+- Overlay больше не принимает замороженный после сна dashboard как свежие лимиты.
+- Дневной расход после сна больше не должен оставаться на `0`, если hidden context вернул stale snapshot.
 - Popover server больше не пишет traceback `BrokenPipeError`, когда локальный клиент закрыл соединение.
+
+### Диагностика
+
+- Добавлен `scripts/diagnose-resume.ps1`: безопасная проверка resume/refresh/snapshot логов без browser profile, cookies и приватных данных.
 
 ### Проверки
 
-- `tests.test_browser_reader tests.test_log_utils tests.test_scripts tests.test_reader_worker tests.test_popover_server`: 69 tests OK.
-- `compileall src/neurogate_usage_overlay`: OK.
+- `scripts/check.ps1`: 198 tests OK, 1 macOS UTF-8 launcher test skipped on this Windows machine because `bash` is unavailable.
 - `git diff --check`: чисто.
+- Проверен live Windows sleep/resume: после пробуждения лимиты и дневной расход обновились без ручного перезапуска.
 - Проверен live macOS-запуск: menu bar process работает, лимиты читаются.
 
 ## 2.6 — 04-07-2026

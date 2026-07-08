@@ -583,6 +583,8 @@ class NeurogateUsageReader:
             return "stale_cabinet"
         if api_failure_reason in {"missing_token", "api_unauthorized"}:
             return api_failure_reason
+        if force_session_recovery:
+            return "forced_session_recovery"
         return None
 
     def _recover_hidden_session(self, reason: str) -> str | None:
@@ -593,6 +595,8 @@ class NeurogateUsageReader:
         )
         try:
             self._launch_context(headless=True)
+            if self._page and self.settings.usage_url not in self._page.url:
+                self._page.goto(self.settings.usage_url, wait_until="domcontentloaded")
             recovered_text = self._wait_for_usage_text()
         except Exception as exc:  # noqa: BLE001 - normal login flow should still continue.
             self._write_debug(
