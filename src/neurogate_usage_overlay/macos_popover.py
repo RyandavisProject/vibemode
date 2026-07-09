@@ -102,14 +102,17 @@ def _make_vm_badge_image(title: str = "", progress_percent: float | None = None)
     }
     title_text = NSString.stringWithString_(title)
     title_size = title_text.sizeWithAttributes_(title_attrs)
-    title_width = max(12.0, float(title_size.width))
+    title_width = max(12.0, float(title_size.width)) if title else 0.0
     text_x = 22.0
-    width = int(text_x + title_width + 2)
+    width = int(text_x + title_width + 2) if title else 18
     image = NSImage.alloc().initWithSize_(NSMakeSize(width, 18))
     image.lockFocus()
     try:
         _draw_vm_blob()
         _draw_vm_text()
+
+        if not title:
+            return image
 
         title_text.drawInRect_withAttributes_(NSMakeRect(text_x, 6.4, title_width + 2.0, 12.0), title_attrs)
 
@@ -227,6 +230,16 @@ class MenuBarPopover:
         self._web_view: Any = None
         self._delegate: Any = None
 
+    def _apply_badge(self, title: str, progress_percent: float | None = None) -> None:
+        if not self._status_item:
+            return
+        image = _make_vm_badge_image(title, progress_percent)
+        self._status_item.setLength_(max(24.0, float(image.size().width) + 2.0))
+        btn = self._status_item.button()
+        btn.setImage_(image)
+        btn.setImagePosition_(NSImageLeft)
+        btn.setTitle_("")
+
     # Call from main thread only
     def install(self) -> None:
         """Create the status item and popover. Must be called on the main thread."""
@@ -234,10 +247,16 @@ class MenuBarPopover:
 
         bar = NSStatusBar.systemStatusBar()
         self._status_item = bar.statusItemWithLength_(NSVariableStatusItemLength)
+        try:
+            self._status_item.setAutosaveName_("VibemodeMenuBarStatus")
+            # Keep Vibemode from being the first item macOS drops when app menus are wide.
+            self._status_item._setDropPriority_(-1_000_000.0)  # type: ignore[attr-defined]
+            self._status_item._setOverflowSpecifierPriority_(1_000_000)  # type: ignore[attr-defined]
+        except Exception:
+            pass
 
         btn = self._status_item.button()
-        btn.setImage_(_make_vm_badge_image(self._initial_title))
-        btn.setImagePosition_(NSImageLeft)
+        self._apply_badge(self._initial_title)
         if hasattr(btn, "setImageHugsTitle_"):
             btn.setImageHugsTitle_(True)
         try:
@@ -246,8 +265,6 @@ class MenuBarPopover:
             btn.sendActionOn_(NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp)
         except Exception:
             pass
-        btn.setTitle_("")
-
         self._delegate = StatusItemDelegate.alloc().init()
         self._delegate._status_item = self._status_item
         self._delegate.setup(self._popover, self._web_view, self._server_url)
@@ -260,18 +277,11 @@ class MenuBarPopover:
 
     def set_title(self, title: str) -> None:
         """Update the status bar title. Safe to call from main thread."""
-        if self._status_item:
-            btn = self._status_item.button()
-            btn.setImage_(_make_vm_badge_image(title))
-            btn.setTitle_("")
+        self._apply_badge(title)
 
     def set_status(self, title: str, progress_percent: float | None = None) -> None:
         """Update title and tiny status progress strip. Safe to call from main thread."""
-        if not self._status_item:
-            return
-        btn = self._status_item.button()
-        btn.setImage_(_make_vm_badge_image(title, progress_percent))
-        btn.setTitle_("")
+        self._apply_badge(title, progress_percent)
 
     def resize_to_content(self, height: int) -> None:
         """Resize the popover to fit content. Must be called on the main thread."""

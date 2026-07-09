@@ -15,6 +15,7 @@ from neurogate_usage_overlay.overlay import (
     compact_plan_status,
     display_version,
     format_limit_value,
+    menu_bar_number,
     version_menu_label,
 )
 from neurogate_usage_overlay.resume_recovery import ResumeRecoveryState
@@ -78,6 +79,65 @@ class FakeDragRoot(FakePositionRoot):
             x_text, y_text = value[1:].split("+", 1)
             self.x = int(x_text)
             self.y = int(y_text)
+
+
+class OverlaySourceOrderTest(unittest.TestCase):
+    def test_lk_visibility_toggle_is_not_exposed_in_menus(self):
+        overlay_source = (
+            Path(__file__).resolve().parents[1] / "src" / "neurogate_usage_overlay" / "overlay.py"
+        ).read_text(
+            encoding="utf-8"
+        )
+        popover_source = (
+            Path(__file__).resolve().parents[1] / "src" / "neurogate_usage_overlay" / "popover_server.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertNotIn("Не закрывать ЛК", overlay_source)
+        self.assertNotIn('self._server.on_action("toggle_keep"', overlay_source)
+        self.assertNotIn('"keep_browser_open": self._keep_browser_open()', overlay_source)
+        self.assertNotIn('"has_keep_toggle": self._has_keep_browser_toggle()', overlay_source)
+        self.assertNotIn("Показывать ЛК", popover_source)
+        self.assertNotIn("Закрывать ЛК", popover_source)
+        self.assertNotIn("toggleKeepBrowser", popover_source)
+
+    def test_macos_startup_refresh_timers_are_one_shot(self):
+        source = (Path(__file__).resolve().parents[1] / "src" / "neurogate_usage_overlay" / "overlay.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            "def _make_ns_timer(interval: float, callback: \"Callable[[], None]\", *, repeats: bool = True)",
+            source,
+        )
+        self.assertIn("self._make_ns_timer(0.5, self._initial_refresh, repeats=False)", source)
+        self.assertIn("self._make_ns_timer(1.2, self._initial_update_check, repeats=False)", source)
+        self.assertIn("self._ns_timer = self._make_ns_timer(delay, _tick, repeats=False)", source)
+
+    def test_macos_menu_bar_badge_resizes_to_image_width(self):
+        source = (
+            Path(__file__).resolve().parents[1] / "src" / "neurogate_usage_overlay" / "macos_popover.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("def _apply_badge", source)
+        self.assertIn("image = _make_vm_badge_image(title, progress_percent)", source)
+        self.assertIn("self._status_item.setLength_(max(24.0, float(image.size().width) + 2.0))", source)
+        self.assertIn("btn.setImage_(image)", source)
+        self.assertIn("btn.setImagePosition_(NSImageLeft)", source)
+        self.assertIn('btn.setTitle_("")', source)
+        self.assertIn("self._apply_badge(title, progress_percent)", source)
+        self.assertIn('self._status_item.setAutosaveName_("VibemodeMenuBarStatus")', source)
+        self.assertIn("self._status_item._setDropPriority_(-1_000_000.0)", source)
+        self.assertIn("self._status_item._setOverflowSpecifierPriority_(1_000_000)", source)
+
+    def test_macos_menu_bar_title_uses_short_numbers_without_units(self):
+        source = (Path(__file__).resolve().parents[1] / "src" / "neurogate_usage_overlay" / "overlay.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertEqual(menu_bar_number(77_120_000), "77")
+        self.assertEqual(menu_bar_number(150_000_000), "150")
+        self.assertIn("return f\"{menu_bar_number(spent)}/{menu_bar_number(limit)}\"", source)
+        self.assertNotIn("return f\"{short_number_clean(spent)}/{short_number_clean(limit)}\"", source)
 
 
 class OverlayScheduleTest(unittest.TestCase):

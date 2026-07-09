@@ -24,7 +24,7 @@ from .vibemode_parser import (
 USAGE_URL = "https://portal.vibemod.pro/client"
 VIBEMODE_API_BASE_URL = "https://api.vibemod.pro"
 VISIBLE_WINDOW_ARGS = ("--window-position=96,80", "--window-size=1180,860")
-HIDDEN_WINDOW_ARGS = ("--window-position=-32000,-32000", "--window-size=1440,950")
+HIDDEN_WINDOW_ARGS = ("--window-position=-32000,-32000", "--window-size=1440,950", "--hide-crash-restore-bubble")
 LOGIN_CONFIRM_ATTEMPTS = 10
 LOGIN_PROMPT_CONFIRM_ATTEMPTS = 3
 AUTO_LOGIN_DELAY_ATTEMPTS = 3
@@ -357,14 +357,15 @@ class NeurogateUsageReader:
         return pids
 
     def _hide_offscreen_chrome_macos(self) -> int:
-        """On macOS, Chrome is already positioned offscreen via HIDDEN_WINDOW_ARGS.
+        """Hide the headed Chrome window used for reads on macOS.
 
-        There is no system API to hide windows of other processes without
-        Accessibility permissions. The offscreen placement (-32000,-32000)
-        keeps the browser invisible in practice.  We use AppleScript to move
-        Chrome windows off-screen only when we can, but we never raise an error
-        if the call fails — the overlay must keep working regardless.
+        macOS/Chrome can clamp large negative coordinates back onto the visible
+        desktop edge. Minimizing the Playwright-controlled window is more stable
+        than relying on offscreen coordinates alone.
         """
+        hidden = self._minimize_current_browser_window_macos()
+        if hidden:
+            return hidden
         needle = str(self.settings.profile_dir.resolve())
         try:
             result = subprocess.run(
@@ -382,10 +383,60 @@ class NeurogateUsageReader:
                     pass
             if not pids:
                 return 0
-            # AppleScript cannot target windows by PID without Accessibility
-            # permissions, so just report that we found processes; the browser
-            # stays at -32000,-32000 which is effectively hidden.
+            minimized = self._minimize_likely_vibemode_chrome_windows_macos()
+            if minimized:
+                return minimized
             return len(pids)
+        except Exception:
+            return 0
+
+    def _minimize_current_browser_window_macos(self) -> int:
+        if not self._context or not self._page:
+            return 0
+        try:
+            session = self._context.new_cdp_session(self._page)
+            window = session.send("Browser.getWindowForTarget")
+            window_id = window.get("windowId") if isinstance(window, dict) else None
+            if window_id is None:
+                return 0
+            session.send(
+                "Browser.setWindowBounds",
+                {
+                    "windowId": window_id,
+                    "bounds": {"windowState": "minimized"},
+                },
+            )
+            return 1
+        except Exception as exc:  # noqa: BLE001 - hidden placement must not break limit reads.
+            self._write_debug(
+                parse_usage_text("", source_url=self.settings.usage_url),
+                note=f"macos_offscreen_window_error={exc!r}",
+            )
+            return 0
+
+    def _minimize_likely_vibemode_chrome_windows_macos(self) -> int:
+        script = """
+        set minimizedCount to 0
+        tell application "Google Chrome"
+            repeat with w in windows
+                set windowTitle to title of w
+                if windowTitle contains "VibeMode" or windowTitle contains "vibemode" or windowTitle contains "portal.vibemod" then
+                    set minimized of w to true
+                    set minimizedCount to minimizedCount + 1
+                end if
+            end repeat
+        end tell
+        return minimizedCount
+        """
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            return int((result.stdout or "0").strip() or "0")
         except Exception:
             return 0
 
@@ -739,9 +790,10 @@ class NeurogateUsageReader:
 
     def _hide_current_browser_window(self) -> int:
         if sys.platform == "darwin":
-            self._close_context()
+            hidden_count = self._hide_hidden_browser_taskbar_windows()
+            self._current_headless = True
             self._login_visible = False
-            return terminate_profile_browser_processes(self.settings.profile_dir)
+            return hidden_count
         hidden_count = self._hide_hidden_browser_taskbar_windows()
         self._current_headless = True
         self._login_visible = False

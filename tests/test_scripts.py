@@ -21,11 +21,16 @@ class ScriptSafetyTest(unittest.TestCase):
         script = (ROOT / "scripts" / "create-desktop-shortcut.sh").read_text(encoding="utf-8")
 
         self.assertIn("PROJECT_ROOT_QUOTED", script)
-        self.assertIn("PROJECT_ROOT_QUOTED=\"'${ROOT//\\'/\\'\\\\\\'\\'}'\"", script)
+        self.assertIn("PROJECT_ROOT", script)
+        self.assertIn("--project-root", script)
         self.assertIn("ROOT=$PROJECT_ROOT_QUOTED", script)
         self.assertIn("bash -n \"$MACOS_DIR/launch\"", script)
         self.assertIn("com.apple.quarantine", script)
-        self.assertIn('exec bash "\\$ROOT/scripts/run-overlay.sh"', script)
+        self.assertIn("launch-overlay-detached.sh", script)
+        self.assertIn('rm -f "$COMMAND_PATH"', script)
+        self.assertNotIn("do shell script", script)
+        self.assertNotIn('tell application "Terminal"', script)
+        self.assertNotIn("launchctl kickstart", script)
         self.assertNotIn('ROOT="$(dirname "$(dirname "$(dirname "$LAUNCH_DIR")")")"', script)
 
     def test_macos_app_launcher_preserves_utf8_project_root(self):
@@ -56,6 +61,32 @@ class ScriptSafetyTest(unittest.TestCase):
             self.assertIn(f"ROOT='{project}'", content)
             self.assertNotIn("$'", content)
 
+    def test_macos_app_launcher_can_point_to_runtime_root(self):
+        source = ROOT / "scripts" / "create-desktop-shortcut.sh"
+        with tempfile.TemporaryDirectory(prefix="vibemode-runtime-") as directory:
+            project = Path(directory) / "source"
+            runtime = Path(directory) / "runtime"
+            scripts = project / "scripts"
+            shortcuts = Path(directory) / "Desktop"
+            scripts.mkdir(parents=True)
+            runtime.mkdir()
+            shortcuts.mkdir()
+            launcher = scripts / "create-desktop-shortcut.sh"
+            launcher.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+            launcher.chmod(0o755)
+
+            subprocess.run(
+                ["bash", str(launcher), "--shortcut-dir", str(shortcuts), "--project-root", str(runtime)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            launch_script = shortcuts / "Vibemode.app" / "Contents" / "MacOS" / "launch"
+            content = launch_script.read_text(encoding="utf-8")
+            self.assertIn(f"ROOT='{runtime}'", content)
+            self.assertNotIn(str(project), content)
+
     def test_macos_install_and_update_refresh_desktop_and_app_shortcuts(self):
         install_script = (ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
         update_script = (ROOT / "scripts" / "update-and-restart.sh").read_text(encoding="utf-8")
@@ -68,7 +99,37 @@ class ScriptSafetyTest(unittest.TestCase):
         script = (ROOT / "scripts" / "run-overlay.sh").read_text(encoding="utf-8")
 
         self.assertIn("[p]ython.*-m[[:space:]]+neurogate_usage_overlay", script)
+        self.assertIn('[[ "$cmdline" == *"$VENV_PYTHON"* ]]', script)
         self.assertNotIn("neurogate_usage_overlay|vibemode", script)
+
+    def test_macos_launch_shortcut_restarts_existing_overlay(self):
+        script = (ROOT / "scripts" / "run-overlay.sh").read_text(encoding="utf-8")
+        shortcut_script = (ROOT / "scripts" / "create-desktop-shortcut.sh").read_text(encoding="utf-8")
+
+        self.assertIn('if [[ "$LAUNCH_ONLY" == "1" ]]; then', script)
+        self.assertIn("Restarting Vibemode overlay", script)
+        self.assertNotIn("Vibemode overlay is already running.", script)
+        self.assertIn("Double-click it to start or restart Vibemode.", shortcut_script)
+        self.assertIn("launch-overlay-detached.sh", shortcut_script)
+
+    def test_macos_detached_launcher_uses_screen_when_available(self):
+        script = (ROOT / "scripts" / "launch-overlay-detached.sh").read_text(encoding="utf-8")
+
+        self.assertIn('SESSION_NAME="vibemode"', script)
+        self.assertIn("screen -dmS", script)
+        self.assertIn("VIBEMODE_LAUNCH_ONLY=1", script)
+        self.assertIn("scripts/run-overlay.sh", script)
+        self.assertIn("nohup bash scripts/run-overlay.sh", script)
+
+    def test_macos_runtime_installer_copies_to_home_runtime(self):
+        script = (ROOT / "scripts" / "install-macos-runtime.sh").read_text(encoding="utf-8")
+
+        self.assertIn("$HOME/.vibemode/runtime", script)
+        self.assertIn("rsync -a --delete", script)
+        self.assertIn('--project-root "$RUNTIME_ROOT"', script)
+        self.assertIn('SOURCE_PYTHON="$SOURCE_ROOT/.venv/bin/python"', script)
+        self.assertIn('"$SOURCE_PYTHON" -m venv "$RUNTIME_ROOT/.venv"', script)
+        self.assertIn('"$RUNTIME_PYTHON" -m pip install -e "$RUNTIME_ROOT[macos]"', script)
 
     def test_windows_run_overlay_does_not_kill_by_broad_brand_name(self):
         script = (ROOT / "scripts" / "run-overlay.ps1").read_text(encoding="utf-8")

@@ -1,4 +1,4 @@
-# Vibemode Overlay 2.7
+# Vibemode Overlay 2.8
 
 Компактный desktop-overlay для лимитов Vibemode API. Работает локально на **Windows** и **macOS**, читает данные из кабинета Vibemode через локальную браузерную сессию Chrome/Playwright и показывает остатки, прогресс и время до сброса лимитов.
 
@@ -14,8 +14,8 @@
 
 <table>
   <tr>
-    <td><img src="docs/screenshots/overlay-tooltip.png" alt="Windows оверлей Vibemode Overlay 2.7" /></td>
-    <td><img src="docs/screenshots/overlay-menu.png" alt="Windows меню Vibemode Overlay 2.7" /></td>
+    <td><img src="docs/screenshots/overlay-tooltip.png" alt="Windows оверлей Vibemode Overlay 2.8" /></td>
+    <td><img src="docs/screenshots/overlay-menu.png" alt="Windows меню Vibemode Overlay 2.8" /></td>
   </tr>
   <tr>
     <td align="center">Windows overlay</td>
@@ -31,20 +31,12 @@
   </tr>
 </table>
 
-## Что нового в 2.7
+## Что нового в 2.8
 
-- macOS: установка из Git/ZIP создаёт `Vibemode.command` на рабочем столе.
-- Повторный запуск desktop-ярлыка больше не перезапускает overlay и не переоткрывает ЛК.
-- Первый login prompt больше не запускает лишний hidden recovery перед входом.
-- Windows/macOS: восстановление после сна стало нативным для платформы и не удаляет browser profile.
-- Windows: после сна forced recovery пересоздаёт hidden Playwright context даже при внешне валидном, но замороженном dashboard.
-- Overlay больше не заменяет хорошие лимиты на неполный snapshot после пробуждения.
-- Дневной расход не сбрасывается в ноль при росте 7-дневного окна.
-- Добавлена безопасная диагностика `scripts/diagnose-resume.ps1` для проверки repeated snapshot-ов после сна.
-- Логи `restart.log` и `launcher.log` больше не растут бесконечно.
-- Chrome-профиль чистит безопасные cache/metrics-файлы, не трогая cookies и session storage.
-- Popover server не пишет лишний traceback, если локальный клиент закрыл соединение.
-- Проверено: `scripts/check.ps1`, unit-тесты recovery/history/overlay/browser reader, live Windows sleep/resume, live macOS-запуск.
+- macOS: исправлен запуск через `Vibemode.app` и обновление runtime.
+- macOS: убран пункт `Показывать ЛК` / `Закрывать ЛК`.
+- macOS: исправлен ввод лимита на день в popover.
+- Проверено: тесты затронутых модулей, `compileall`, live macOS-запуск.
 
 ## Установка
 
@@ -59,7 +51,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 ### Windows: из ZIP-архива
 
 1. Открой [Releases](https://github.com/RyandavisProject/vibemode/releases).
-2. Скачай `vibemode-v2.7.zip` из последнего релиза.
+2. Скачай `vibemode-v2.8.zip` из последнего релиза.
 3. Распакуй архив, например в `C:\Vibemode`.
 4. Запусти:
 
@@ -81,19 +73,19 @@ cd vibemode
 bash scripts/install.sh
 ```
 
-Установка создаёт ярлык `Vibemode.command` на рабочем столе. Если overlay уже запущен, повторный запуск ярлыка не перезапускает ЛК.
+Установка создаёт `Vibemode.app` на рабочем столе и в Applications.
 
 ### macOS: из ZIP-архива
 
 1. Открой [Releases](https://github.com/RyandavisProject/vibemode/releases).
-2. Скачай `vibemode-v2.7.zip` из последнего релиза.
+2. Скачай `vibemode-v2.8.zip` из последнего релиза.
 3. Распакуй архив и в папке проекта запусти:
 
 ```bash
 bash scripts/install.sh
 ```
 
-После установки на рабочем столе появится `Vibemode.command`.
+После установки на рабочем столе появится `Vibemode.app`.
 
 Запуск:
 
@@ -127,7 +119,6 @@ bash scripts/run-overlay.sh
 - Клик по overlay/menu bar открывает меню действий.
 - `Обновить` — принудительно перечитать лимиты.
 - `Лимит на день` — вручную задать дневной расход.
-- `Показывать ЛК` / `Закрывать ЛК` — открыть или скрыть окно кабинета.
 - `Сменить аккаунт` — сбросить локальный профиль overlay и открыть чистый вход.
 - `Интервал` — переключить частоту обновления.
 
@@ -148,6 +139,13 @@ python scripts\check-api-contract.py
 API-ключ, если используется для диагностики, вводится скрыто или через переменную окружения и не сохраняется проектом.
 
 ## История
+
+### 2.8 — 09-07-2026
+
+- macOS: исправлен запуск через `Vibemode.app` и обновление runtime.
+- macOS: убран пункт `Показывать ЛК` / `Закрывать ЛК`.
+- macOS: исправлен ввод лимита на день в popover.
+- Проверено: тесты затронутых модулей, `compileall`, live macOS-запуск.
 
 ### 2.7 — 08-07-2026
 

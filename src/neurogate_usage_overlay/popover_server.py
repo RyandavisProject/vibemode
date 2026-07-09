@@ -323,10 +323,6 @@ function render() {
     html += action("−", "Скрыть лимит на день", "window.__ng_action('hide_daily')");
   }
 
-  if (data.has_keep_toggle) {
-    html += action(data.keep_browser_open ? "◉" : "○", data.keep_browser_open ? "Закрывать ЛК" : "Показывать ЛК", "toggleKeepBrowser()");
-  }
-
   html += action(data.theme === "dark" ? "☀" : "☾", data.theme === "dark" ? "Светлая тема" : "Тёмная тема", "toggleTheme()");
 
   if (data.has_account_reset) {
@@ -414,12 +410,6 @@ function toggleTheme() {
   window.__ng_action('toggle_theme');
 }
 
-function toggleKeepBrowser() {
-  data.keep_browser_open = !data.keep_browser_open;
-  render();
-  window.__ng_action('toggle_keep');
-}
-
 function openDailyEditor() {
   intervalMenuOpen = false;
   dailyEditorOpen = true;
@@ -446,6 +436,11 @@ function dailyForm() {
 function dailyKey(event) {
   if (event.key === "Enter") saveDailyLimit();
   if (event.key === "Escape") { dailyEditorOpen = false; render(); }
+}
+
+function isDailyInputEditing() {
+  const input = document.getElementById("dailyLimitInput");
+  return dailyEditorOpen && input && document.activeElement === input;
 }
 
 function saveDailyLimit() {
@@ -477,7 +472,7 @@ setInterval(() => {
   fetch("/data?token=" + encodeURIComponent(window.__NG_ACTION_TOKEN__ || "")).then(r => r.json()).then(d => {
     Object.assign(data, d);
     window.__NG_ACTION_TOKEN__ = data.action_token || window.__NG_ACTION_TOKEN__ || "";
-    render();
+    if (!isDailyInputEditing()) render();
   }).catch(() => {});
 }, 2000);
 </script>

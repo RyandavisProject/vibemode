@@ -294,6 +294,90 @@ class BrowserReaderModeTest(unittest.TestCase):
             self.assertEqual(launches, [False])
             self.assertEqual(hides, 1)
 
+    def test_macos_hidden_window_is_minimized_with_cdp(self):
+        reader = NeurogateUsageReader(BrowserSettings(headless=True))
+        sends: list[tuple[str, object | None]] = []
+
+        class Session:
+            def send(self, name: str, payload: object | None = None):
+                sends.append((name, payload))
+                if name == "Browser.getWindowForTarget":
+                    return {"windowId": 42}
+                return {}
+
+        class Context:
+            def new_cdp_session(self, _page: object) -> Session:
+                return Session()
+
+        reader._context = Context()
+        reader._page = object()
+
+        moved = reader._minimize_current_browser_window_macos()
+
+        self.assertEqual(moved, 1)
+        self.assertEqual(sends[0], ("Browser.getWindowForTarget", None))
+        self.assertEqual(
+            sends[1],
+            ("Browser.setWindowBounds", {"windowId": 42, "bounds": {"windowState": "minimized"}}),
+        )
+
+    def test_hidden_browser_args_disable_crash_restore_bubble(self):
+        reader = NeurogateUsageReader(BrowserSettings(headless=True))
+
+        args = reader._browser_args(hidden=True)
+
+        self.assertIn("--hide-crash-restore-bubble", args)
+
+    def test_macos_close_lk_hides_window_without_closing_context(self):
+        reader = NeurogateUsageReader(BrowserSettings(headless=False))
+        reader._current_headless = False
+        closed: list[bool] = []
+        reader._context = type("Context", (), {"close": lambda _self: closed.append(True)})()
+        reader._page = object()
+        reader._hide_hidden_browser_taskbar_windows = lambda: 1  # type: ignore[method-assign]
+
+        hidden = reader._hide_current_browser_window()
+
+        self.assertEqual(hidden, 1)
+        self.assertEqual(closed, [])
+        self.assertTrue(reader._current_headless)
+        self.assertFalse(reader._login_visible)
+        self.assertIsNotNone(reader._context)
+        self.assertIsNotNone(reader._page)
+
+    def test_close_lk_mode_does_not_open_visible_login_on_refresh(self):
+        reader = NeurogateUsageReader(
+            BrowserSettings(
+                headless=True,
+                show_browser_on_login=False,
+                hide_after_successful_login=True,
+            )
+        )
+        reader._playwright = object()
+        reader._page = type("Page", (), {"url": reader.settings.usage_url})()
+        reader._current_headless = True
+        reader._has_successful_snapshot = True
+        texts = iter(["EMAIL\nPASSWORD\nlogin", "EMAIL\nPASSWORD\nlogin"])
+        launches: list[bool] = []
+        opened_visible: list[bool] = []
+
+        def launch_context(*, headless: bool) -> None:
+            launches.append(headless)
+            reader._current_headless = headless
+            reader._page = type("Page", (), {"url": reader.settings.usage_url})()
+
+        reader._wait_for_usage_text = lambda: next(texts)  # type: ignore[method-assign]
+        reader._launch_context = launch_context  # type: ignore[method-assign]
+        reader._open_visible_login_window = lambda: opened_visible.append(True)  # type: ignore[method-assign]
+        reader._write_debug = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+
+        snapshot = reader.read()
+
+        self.assertFalse(snapshot.has_data)
+        self.assertEqual(snapshot.status_note, "нужен вход")
+        self.assertEqual(launches, [True])
+        self.assertEqual(opened_visible, [])
+
     def test_visible_login_prompt_is_marked_as_opened(self):
         reader = NeurogateUsageReader(BrowserSettings(headless=True))
         launches: list[bool] = []

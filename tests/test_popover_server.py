@@ -69,8 +69,14 @@ class PopoverServerTest(unittest.TestCase):
             self.assertIn("Тёмная тема", html)
             self.assertIn("Задать лимит на день", html)
             self.assertIn("dailyLimitInput", html)
+            self.assertIn("function isDailyInputEditing()", html)
+            self.assertIn("if (!isDailyInputEditing()) render();", html)
             self.assertIn("Перезапустить", html)
             self.assertIn("Выход", html)
+            self.assertNotIn("Показывать ЛК", html)
+            self.assertNotIn("Закрывать ЛК", html)
+            self.assertNotIn("toggleKeepBrowser", html)
+            self.assertNotIn("toggle_keep", html)
             self.assertIn("v.2.0 (доступна v.2.1)", html)
             self.assertNotIn("Обновить до", html)
             self.assertIn("106070000", html)
@@ -80,6 +86,35 @@ class PopoverServerTest(unittest.TestCase):
             self.assertNotIn("Рћ", html)
             self.assertNotIn("вЂ", html)
             self.assertNotIn("не ниже", html)
+        finally:
+            server.stop()
+
+    def test_popover_server_does_not_render_lk_visibility_toggle_from_extra_data(self) -> None:
+        server = PopoverServer()
+        try:
+            server.update(
+                UsageSnapshot(updated_at=datetime.now(timezone.utc)),
+                {
+                    "interval_label": "1 мин",
+                    "interval_minutes": 1,
+                    "interval_choices": [],
+                    "daily_limit_enabled": False,
+                    "daily_limit_default": "",
+                    "theme": "light",
+                    "version_label": "v.2.0 (последняя)",
+                    "version_update_available": False,
+                    "has_account_reset": False,
+                    "has_keep_toggle": True,
+                    "keep_browser_open": True,
+                },
+            )
+
+            html = server.render_html()
+
+            self.assertNotIn("Показывать ЛК", html)
+            self.assertNotIn("Закрывать ЛК", html)
+            self.assertNotIn("toggleKeepBrowser", html)
+            self.assertNotIn("toggle_keep", html)
         finally:
             server.stop()
 

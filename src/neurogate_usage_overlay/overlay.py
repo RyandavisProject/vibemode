@@ -209,6 +209,16 @@ def short_number_clean(value: int | None) -> str:
     return short_number(value).replace(".0B", "B").replace(".0M", "M").replace(".0K", "K")
 
 
+def menu_bar_number(value: int | None) -> str:
+    if value is None:
+        return "-"
+    if abs(value) >= 1_000_000:
+        return f"{value / 1_000_000:.0f}"
+    if abs(value) >= 1_000:
+        return f"{value / 1_000:.0f}K"
+    return str(value)
+
+
 def compact_percent(value: float | None) -> str:
     if value is None:
         return "-"
@@ -614,13 +624,11 @@ class UsageOverlay(_ResumeRecoveryOverlayMixin):
         item_height = 24
         padding = 6
         width = 166
-        keep_browser_open = self._keep_browser_open()
-        keep_browser_label = "Не закрывать ЛК"
         scale_label = "2x размер"
         daily_limit_label = "Скрыть лимит в день" if self._daily_limit_enabled() else "Задать лимит на день"
         version_label = self._version_menu_label()
         version_command = self._version_menu_command()
-        checkbox_labels = {keep_browser_label, scale_label}
+        checkbox_labels = {scale_label}
         rows: list[tuple[str, Callable[[], None] | None, bool]] = [
             ("Обновить лимиты", lambda: self.refresh(force=True), False),
             (
@@ -629,11 +637,6 @@ class UsageOverlay(_ResumeRecoveryOverlayMixin):
                 False,
             ),
             ("", None, False),
-            (
-                keep_browser_label,
-                self._toggle_keep_browser_open if self._has_keep_browser_toggle() else None,
-                keep_browser_open,
-            ),
             (
                 scale_label,
                 self._toggle_ui_scale,
@@ -2086,12 +2089,12 @@ if sys.platform == "darwin":
             daily = self._daily_limit_values()
             if daily:
                 spent, limit, _floor, _percent = daily
-                return f"{short_number_clean(spent)}/{short_number_clean(limit)}"
+                return f"{menu_bar_number(spent)}/{menu_bar_number(limit)}"
             window = find_window(snap, "5h") or (snap.windows[0] if snap.windows else None)
             if window and window.credits_remaining is not None:
-                return short_number_clean(window.credits_remaining)
+                return menu_bar_number(window.credits_remaining)
             if snap.remaining is not None:
-                return short_number_clean(snap.remaining)
+                return menu_bar_number(snap.remaining)
             return "..."
 
         def _menu_bar_progress_percent(self) -> float | None:
@@ -2116,7 +2119,6 @@ if sys.platform == "darwin":
             self._server.on_action("refresh", lambda _payload: self.refresh(force=True))
             self._server.on_action("hide_daily", self._on_hide_daily_limit)
             self._server.on_action("set_daily", self._on_set_daily_limit)
-            self._server.on_action("toggle_keep", self._on_toggle_keep_browser)
             self._server.on_action("set_interval", self._on_set_interval_from_payload)
             self._server.on_action("toggle_theme", self._on_toggle_theme)
             self._server.on_action("reset_account", self._on_reset_account)
@@ -2141,8 +2143,6 @@ if sys.platform == "darwin":
                 "daily_limit_enabled": self._daily_limit_enabled(),
                 "daily_limit": self._daily_limit_payload(),
                 "daily_limit_default": self._daily_limit_default_label(),
-                "keep_browser_open": self._keep_browser_open(),
-                "has_keep_toggle": self._has_keep_browser_toggle(),
                 "interval_label": interval_label,
                 "interval_minutes": self.interval_minutes,
                 "interval_choices": interval_choices,
@@ -2157,37 +2157,6 @@ if sys.platform == "darwin":
                 self._popover_ui.set_status(title, self._menu_bar_progress_percent())
 
         # ------------------------------------------------------------------ callbacks
-
-        def _on_toggle_keep_browser(self, _payload: dict[str, object]) -> None:
-            if not self.keep_browser_open_setter:
-                return
-            enabled = not self._keep_browser_open()
-            self._keep_browser_open_override = enabled
-            self._push_server_data()
-            if not enabled:
-                self._terminate_visible_lk_now()
-
-            def apply_toggle() -> None:
-                try:
-                    self.keep_browser_open_setter(enabled)
-                except Exception as exc:
-                    self._write_ui_log(f"toggle_keep_browser_error {exc!r}")
-                finally:
-                    self._keep_browser_open_override = None
-                    self._push_server_data()
-
-            threading.Thread(target=apply_toggle, daemon=True).start()
-
-        def _terminate_visible_lk_now(self) -> None:
-            if sys.platform != "darwin":
-                return
-            try:
-                from .browser_reader import BrowserSettings, terminate_profile_browser_processes
-
-                count = terminate_profile_browser_processes(BrowserSettings().profile_dir)
-                self._write_ui_log(f"terminate_visible_lk_now count={count}")
-            except Exception as exc:
-                self._write_ui_log(f"terminate_visible_lk_now_error {exc!r}")
 
         def _on_set_interval(self, minutes: int) -> None:
             self.interval_minutes = UsageOverlay._normalize_interval_minutes(minutes)
@@ -2496,12 +2465,16 @@ if sys.platform == "darwin":
         # ------------------------------------------------------------------ NSTimer helpers
 
         @staticmethod
-        def _make_ns_timer(interval: float, callback: "Callable[[], None]") -> object:
-            """Schedule a repeating NSTimer on the main run loop."""
+        def _make_ns_timer(interval: float, callback: "Callable[[], None]", *, repeats: bool = True) -> object:
+            """Schedule an NSTimer on the main run loop."""
             target = _TimerTarget.alloc().init()
             target.setup_(callback)
             timer = _NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
-                interval, target, _objc.selector(target.fire_, selector=b"fire:", signature=b"v@:@"), None, True
+                interval,
+                target,
+                _objc.selector(target.fire_, selector=b"fire:", signature=b"v@:@"),
+                None,
+                repeats,
             )
             _NSRunLoop.mainRunLoop().addTimer_forMode_(timer, _NSDefaultRunLoopMode)
             return timer
@@ -2534,7 +2507,7 @@ if sys.platform == "darwin":
                         self.update_check_running = False
                         self.update_info = value
                         self._push_server_data()
-                        self._make_ns_timer(self.UPDATE_CHECK_SECONDS, self.check_for_updates)
+                        self._make_ns_timer(self.UPDATE_CHECK_SECONDS, self.check_for_updates, repeats=False)
             except Exception:
                 pass
 
@@ -2552,7 +2525,7 @@ if sys.platform == "darwin":
                 self._ns_timer = None
                 self.refresh(force=force_session_recovery)
 
-            self._ns_timer = self._make_ns_timer(delay, _tick)
+            self._ns_timer = self._make_ns_timer(delay, _tick, repeats=False)
 
         # ------------------------------------------------------------------ run / close
 
@@ -2584,8 +2557,8 @@ if sys.platform == "darwin":
             )
 
             # Kick off first refresh and update check after a short delay
-            self._make_ns_timer(0.5, self._initial_refresh)
-            self._make_ns_timer(1.2, self._initial_update_check)
+            self._make_ns_timer(0.5, self._initial_refresh, repeats=False)
+            self._make_ns_timer(1.2, self._initial_update_check, repeats=False)
 
             app.run()
 
