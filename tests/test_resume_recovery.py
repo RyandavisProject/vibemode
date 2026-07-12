@@ -41,17 +41,16 @@ class ResumeRefreshCoordinatorTest(unittest.TestCase):
         self.assertTrue(decision.wait_for_active_refresh)
         self.assertIsNone(decision.abandoned_generation)
 
-    def test_resume_recovery_abandons_stale_active_refresh(self):
+    def test_resume_recovery_waits_for_stale_active_refresh(self):
         state = ResumeRefreshCoordinator(stale_refresh_seconds=10)
-        generation = state.begin_refresh(datetime.now().astimezone() - timedelta(seconds=20))
+        state.begin_refresh(datetime.now().astimezone() - timedelta(seconds=20))
 
         decision = state.request_resume_recovery(datetime.now().astimezone(), is_refreshing=True)
 
-        self.assertTrue(decision.start_refresh)
-        self.assertFalse(decision.wait_for_active_refresh)
-        self.assertEqual(decision.abandoned_generation, generation)
-        self.assertNotEqual(state.refresh_generation, generation)
-        self.assertIsNone(state.refresh_started_at)
+        self.assertFalse(decision.start_refresh)
+        self.assertTrue(decision.wait_for_active_refresh)
+        self.assertIsNone(decision.abandoned_generation)
+        self.assertIsNotNone(state.refresh_started_at)
 
     def test_forced_refresh_waits_for_fresh_active_refresh_without_pending_recovery(self):
         state = ResumeRefreshCoordinator(stale_refresh_seconds=10)

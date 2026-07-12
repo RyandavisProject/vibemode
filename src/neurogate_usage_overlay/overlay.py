@@ -6,7 +6,6 @@ import shlex
 import subprocess
 import sys
 import threading
-import tkinter as tk
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
@@ -19,8 +18,17 @@ from .macos_power import install_macos_power_observer
 from .models import UsageSnapshot, UsageWindow
 from .resume_recovery import ResumeRefreshCoordinator
 from .update_checker import UpdateInfo, check_for_update
-from .win32_power import install_win32_power_broadcast_handler
-from .win32_window import apply_rounded_window_region, configure_rounded_window_background
+
+if sys.platform == "darwin":
+    tk = None
+    install_win32_power_broadcast_handler = None
+    apply_rounded_window_region = None
+    configure_rounded_window_background = None
+else:
+    import tkinter as tk
+
+    from .win32_power import install_win32_power_broadcast_handler
+    from .win32_window import apply_rounded_window_region, configure_rounded_window_background
 
 
 SnapshotReader = Callable[[], UsageSnapshot]
@@ -31,6 +39,7 @@ AccountResetter = Callable[[], None]
 
 class _ResumeRecoveryOverlayMixin:
     STALE_REFRESH_SECONDS: int
+    RESUME_DUPLICATE_SECONDS: int
     refreshing: bool
     last_refresh_at: datetime | None
 
@@ -74,6 +83,12 @@ class _ResumeRecoveryOverlayMixin:
 
     def request_resume_recovery(self, reason: str) -> None:
         now = datetime.now().astimezone()
+        self.last_resume_check_at = now
+        previous_request = getattr(self, "last_resume_recovery_at", None)
+        if previous_request and now - previous_request < timedelta(seconds=self.RESUME_DUPLICATE_SECONDS):
+            self._write_ui_log(f"resume_recovery_duplicate_ignored reason={reason}")
+            return
+        self.last_resume_recovery_at = now
         decision = self._resume_recovery().request_resume_recovery(now, self.refreshing)
         self._sync_resume_recovery_aliases()
         self.last_refresh_at = None
@@ -291,6 +306,7 @@ class UsageOverlay(_ResumeRecoveryOverlayMixin):
     UPDATE_CHECK_SECONDS = 3 * 60 * 60
     RESUME_HEARTBEAT_SECONDS = 30
     RESUME_GAP_SECONDS = 120
+    RESUME_DUPLICATE_SECONDS = 5
     STALE_REFRESH_SECONDS = 120
     DRAG_FRAME_MS = 16
     INTERVAL_CHOICES_MINUTES = (1, 3, 5, 10, 15, 60)
@@ -339,6 +355,7 @@ class UsageOverlay(_ResumeRecoveryOverlayMixin):
         self.resume_after_id: str | None = None
         self.last_refresh_at: datetime | None = None
         self.last_resume_check_at: datetime | None = None
+        self.last_resume_recovery_at: datetime | None = None
         self.last_snapshot: UsageSnapshot | None = None
         self.transient_failure_since: datetime | None = None
         self.transient_failure_count = 0
@@ -1882,6 +1899,7 @@ if sys.platform == "darwin":
         UPDATE_CHECK_SECONDS = UsageOverlay.UPDATE_CHECK_SECONDS
         RESUME_HEARTBEAT_SECONDS = UsageOverlay.RESUME_HEARTBEAT_SECONDS
         RESUME_GAP_SECONDS = UsageOverlay.RESUME_GAP_SECONDS
+        RESUME_DUPLICATE_SECONDS = UsageOverlay.RESUME_DUPLICATE_SECONDS
         STALE_REFRESH_SECONDS = UsageOverlay.STALE_REFRESH_SECONDS
         TRANSIENT_FAILURE_CONFIRMATIONS = UsageOverlay.TRANSIENT_FAILURE_CONFIRMATIONS
         TRANSIENT_FAILURE_GRACE_SECONDS = UsageOverlay.TRANSIENT_FAILURE_GRACE_SECONDS
@@ -1911,6 +1929,7 @@ if sys.platform == "darwin":
             self.last_snapshot: UsageSnapshot | None = None
             self.last_refresh_at: datetime | None = None
             self.last_resume_check_at: datetime | None = None
+            self.last_resume_recovery_at: datetime | None = None
             self._keep_browser_open_override: bool | None = None
             self.refreshing = False
             self.resume_recovery = ResumeRefreshCoordinator(self.STALE_REFRESH_SECONDS)

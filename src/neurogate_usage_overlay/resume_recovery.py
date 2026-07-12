@@ -47,11 +47,6 @@ class ResumeRefreshCoordinator:
         self.resume_recovery_pending = True
         if not is_refreshing:
             return ResumeRecoveryDecision(start_refresh=True)
-        if self.is_refresh_stale(now):
-            return ResumeRecoveryDecision(
-                start_refresh=True,
-                abandoned_generation=self.abandon_active_refresh(),
-            )
         return ResumeRecoveryDecision(wait_for_active_refresh=True)
 
     def request_forced_refresh(self, now: datetime, is_refreshing: bool) -> ResumeRecoveryDecision:

@@ -22,6 +22,9 @@ from neurogate_usage_overlay.resume_recovery import ResumeRecoveryState
 from neurogate_usage_overlay.update_checker import UpdateInfo
 
 
+MACOS_TK_UNSAFE_REASON = "Tk window tests can crash the macOS window server"
+
+
 class FakeRoot:
     def __init__(self) -> None:
         self.after_calls: list[int] = []
@@ -377,7 +380,7 @@ class OverlayScheduleTest(unittest.TestCase):
         self.assertIsNone(overlay.last_refresh_at)
         self.assertEqual(root.after_calls, [UsageOverlay.RESUME_HEARTBEAT_SECONDS * 1000])
 
-    def test_resume_recovery_abandons_stale_active_refresh(self):
+    def test_resume_recovery_waits_for_stale_active_refresh(self):
         overlay = UsageOverlay.__new__(UsageOverlay)
         calls: list[bool] = []
         logs: list[str] = []
@@ -391,10 +394,30 @@ class OverlayScheduleTest(unittest.TestCase):
 
         overlay.request_resume_recovery("test_resume")
 
-        self.assertEqual(calls, [True])
+        self.assertEqual(calls, [])
         self.assertIsNone(overlay.last_refresh_at)
-        self.assertFalse(overlay.refreshing)
-        self.assertTrue(any("stale_refresh_abandoned" in item for item in logs))
+        self.assertTrue(overlay.refreshing)
+        self.assertTrue(any("resume_recovery_waiting_for_active_refresh" in item for item in logs))
+
+    def test_duplicate_resume_signal_is_ignored(self):
+        overlay = UsageOverlay.__new__(UsageOverlay)
+        calls: list[bool] = []
+        logs: list[str] = []
+        overlay.refreshing = False
+        overlay.last_refresh_at = datetime.now().astimezone()
+        overlay.last_resume_check_at = datetime.now().astimezone() - timedelta(minutes=10)
+        overlay.refresh = lambda force=False: calls.append(force)  # type: ignore[method-assign]
+        overlay._write_ui_log = lambda message: logs.append(message)
+
+        overlay.request_resume_recovery("macos_workspace_wake")
+        overlay.request_resume_recovery("macos_workspace_wake")
+
+        self.assertEqual(calls, [True])
+        self.assertTrue(any("resume_recovery_duplicate_ignored" in item for item in logs))
+        self.assertLess(
+            datetime.now().astimezone() - overlay.last_resume_check_at,
+            timedelta(seconds=1),
+        )
 
     def test_resume_recovery_waits_for_fresh_active_refresh(self):
         overlay = UsageOverlay.__new__(UsageOverlay)
@@ -799,6 +822,7 @@ class OverlayProgressTest(unittest.TestCase):
         self.assertEqual(overlay._limit_tooltip_text("7д", snapshot.windows[0]), "сегодня потрачено: 10.4M")
 
 
+@unittest.skipIf(sys.platform == "darwin", MACOS_TK_UNSAFE_REASON)
 class OverlayRenderTest(unittest.TestCase):
     def test_large_scale_header_text_does_not_overlap_interval_pill(self):
         snapshot = UsageSnapshot(
@@ -951,6 +975,7 @@ class OverlayRenderTest(unittest.TestCase):
 
 
 class OverlayTransientStatusTest(unittest.TestCase):
+    @unittest.skipIf(sys.platform == "darwin", MACOS_TK_UNSAFE_REASON)
     def test_force_refresh_passes_session_recovery_hint_to_reader(self):
         calls: list[bool] = []
 
@@ -1157,6 +1182,7 @@ class OverlayUpdateTest(unittest.TestCase):
         assert command is not None
         self.assertIs(command.__func__, overlay._start_update.__func__)
 
+    @unittest.skipIf(sys.platform == "darwin", MACOS_TK_UNSAFE_REASON)
     def test_version_menu_row_is_read_only_without_update(self):
         overlay = UsageOverlay(lambda: UsageSnapshot(updated_at=datetime.now()))
         try:
@@ -1173,6 +1199,7 @@ class OverlayUpdateTest(unittest.TestCase):
         finally:
             overlay.close()
 
+    @unittest.skipIf(sys.platform == "darwin", MACOS_TK_UNSAFE_REASON)
     def test_version_menu_row_is_clickable_when_update_is_available(self):
         overlay = UsageOverlay(lambda: UsageSnapshot(updated_at=datetime.now()))
         try:
@@ -1192,6 +1219,7 @@ class OverlayUpdateTest(unittest.TestCase):
         finally:
             overlay.close()
 
+    @unittest.skipUnless(sys.platform.startswith("win"), "Windows updater test")
     def test_start_update_launches_update_script_with_target_version(self):
         overlay = UsageOverlay.__new__(UsageOverlay)
         overlay.update_info = UpdateInfo(
@@ -1212,6 +1240,7 @@ class OverlayUpdateTest(unittest.TestCase):
         self.assertIn("-TargetVersion", args)
         self.assertIn("v1.5.1", args)
 
+    @unittest.skipUnless(sys.platform.startswith("win"), "Windows updater test")
     def test_start_update_passes_release_zip_and_checksum(self):
         overlay = UsageOverlay.__new__(UsageOverlay)
         overlay.update_info = UpdateInfo(

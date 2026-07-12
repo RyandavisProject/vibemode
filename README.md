@@ -1,4 +1,4 @@
-# Vibemode Overlay 2.8
+# Vibemode Overlay 2.9
 
 Компактный desktop-overlay для лимитов Vibemode API. Работает локально на **Windows** и **macOS**, читает данные из кабинета Vibemode через локальную браузерную сессию Chrome/Playwright и показывает остатки, прогресс и время до сброса лимитов.
 
@@ -14,8 +14,8 @@
 
 <table>
   <tr>
-    <td><img src="docs/screenshots/overlay-tooltip.png" alt="Windows оверлей Vibemode Overlay 2.8" /></td>
-    <td><img src="docs/screenshots/overlay-menu.png" alt="Windows меню Vibemode Overlay 2.8" /></td>
+    <td><img src="docs/screenshots/overlay-tooltip.png" alt="Windows оверлей Vibemode Overlay 2.9" /></td>
+    <td><img src="docs/screenshots/overlay-menu.png" alt="Windows меню Vibemode Overlay 2.9" /></td>
   </tr>
   <tr>
     <td align="center">Windows overlay</td>
@@ -31,12 +31,10 @@
   </tr>
 </table>
 
-## Что нового в 2.8
+## Что нового в 2.9
 
-- macOS: исправлен запуск через `Vibemode.app` и обновление runtime.
-- macOS: убран пункт `Показывать ЛК` / `Закрывать ЛК`.
-- macOS: исправлен ввод лимита на день в popover.
-- Проверено: тесты затронутых модулей, `compileall`, live macOS-запуск.
+- macOS: исправлено повторное открытие страницы входа после сна.
+- macOS: устранены аварийные проверки неиспользуемого Tk-интерфейса.
 
 ## Установка
 
@@ -51,7 +49,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 ### Windows: из ZIP-архива
 
 1. Открой [Releases](https://github.com/RyandavisProject/vibemode/releases).
-2. Скачай `vibemode-v2.8.zip` из последнего релиза.
+2. Скачай `vibemode-v2.9.zip` из последнего релиза.
 3. Распакуй архив, например в `C:\Vibemode`.
 4. Запусти:
 
@@ -78,7 +76,7 @@ bash scripts/install.sh
 ### macOS: из ZIP-архива
 
 1. Открой [Releases](https://github.com/RyandavisProject/vibemode/releases).
-2. Скачай `vibemode-v2.8.zip` из последнего релиза.
+2. Скачай `vibemode-v2.9.zip` из последнего релиза.
 3. Распакуй архив и в папке проекта запусти:
 
 ```bash
@@ -139,6 +137,11 @@ python scripts\check-api-contract.py
 API-ключ, если используется для диагностики, вводится скрыто или через переменную окружения и не сохраняется проектом.
 
 ## История
+
+### 2.9 — 12-07-2026
+
+- macOS: исправлено повторное открытие страницы входа после сна.
+- macOS: устранены аварийные проверки неиспользуемого Tk-интерфейса.
 
 ### 2.8 — 09-07-2026
 
